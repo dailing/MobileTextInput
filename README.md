@@ -121,4 +121,12 @@ The application runs on your local network only for security. To access from mob
 
 ## Stopping the Server
 
-Press `Ctrl+C` in the terminal where the server is running to stop it. 
+Press `Ctrl+C` in the terminal where the server is running to stop it.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. 
