@@ -7,7 +7,14 @@ Uses only standard Python library for maximum compatibility
 import sys
 import subprocess
 import platform
+import os
 from pathlib import Path
+
+
+def get_venv_path():
+    """Get the path to the virtual environment in user's home directory"""
+    home = Path.home()
+    return home / ".webinput_env"
 
 
 def run_command(command, cwd=None, check=True):
@@ -38,14 +45,14 @@ def check_python_version():
 
 def create_virtual_environment():
     """Create virtual environment if it doesn't exist"""
-    venv_path = Path("venv")
+    venv_path = get_venv_path()
     
     if venv_path.exists():
-        print("Virtual environment already exists")
+        print(f"Virtual environment already exists at {venv_path}")
         return True
     
-    print("Creating virtual environment...")
-    success, stdout, stderr = run_command(f"{sys.executable} -m venv venv")
+    print(f"Creating virtual environment at {venv_path}...")
+    success, stdout, stderr = run_command(f"{sys.executable} -m venv {venv_path}")
     
     if success:
         print("Virtual environment created successfully")
@@ -58,21 +65,23 @@ def create_virtual_environment():
 def get_venv_python():
     """Get the path to Python executable in virtual environment"""
     system = platform.system().lower()
+    venv_path = get_venv_path()
     
     if system == "windows":
-        return Path("venv") / "Scripts" / "python.exe"
+        return venv_path / "Scripts" / "python.exe"
     else:
-        return Path("venv") / "bin" / "python"
+        return venv_path / "bin" / "python"
 
 
 def get_venv_pip():
     """Get the path to pip executable in virtual environment"""
     system = platform.system().lower()
+    venv_path = get_venv_path()
     
     if system == "windows":
-        return Path("venv") / "Scripts" / "pip.exe"
+        return venv_path / "Scripts" / "pip.exe"
     else:
-        return Path("venv") / "bin" / "pip"
+        return venv_path / "bin" / "pip"
 
 
 def install_requirements():
