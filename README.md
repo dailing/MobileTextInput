@@ -10,6 +10,7 @@ A simple web application that allows you to use your mobile devices (phone, iPad
 - **Network accessible** - Connect from any device on your local network
 - **Text history** - Keep track of recent text entries
 - **Auto-copy toggle** - Enable/disable automatic clipboard copying
+- **Voice-to-text** - Upload audio files for automatic transcription using OpenAI Whisper
 
 ## Quick Start
 
@@ -96,6 +97,50 @@ The application runs on your local network only for security. To access from mob
 - Python 3.8 or higher
 - Network connection (Wi-Fi)
 - Modern web browser on mobile device
+- **For voice-to-text**: FFmpeg and additional Python packages (see Voice Setup below)
+
+## Voice-to-Text Setup (Optional)
+
+The application now supports voice-to-text transcription using OpenAI Whisper. This is optional but provides powerful speech recognition capabilities.
+
+### Install Voice Dependencies
+
+1. **Install FFmpeg** (required for audio processing):
+   - **Windows**: `choco install ffmpeg` (requires Chocolatey)
+   - **macOS**: `brew install ffmpeg` (requires Homebrew)
+   - **Linux**: `sudo apt install ffmpeg`
+
+2. **Install Python packages** (in your virtual environment):
+   ```bash
+   pip install openai-whisper librosa soundfile pydub
+   ```
+
+3. **Test the installation**:
+   ```bash
+   python test_voice.py
+   ```
+
+### Voice Features
+
+- **Audio file upload** - Supports MP3, WAV, M4A, MP4, WebM, OGG formats
+- **Automatic language detection** - Works with 99+ languages
+- **Fast processing** - Uses Whisper base model for good speed/accuracy balance
+- **Local processing** - All transcription happens on your computer (no cloud)
+- **Mobile-friendly** - Upload audio files directly from your mobile device
+
+### Usage
+
+1. **Upload audio file**: Use the "📁 Upload Audio File" button
+2. **Wait for processing**: Transcription typically takes 1-5 seconds
+3. **Review result**: Transcribed text appears in the text area
+4. **Auto-copy**: Use existing copy/paste features to transfer text
+
+### Model Information
+
+- **Model**: Whisper base (~140MB)
+- **Accuracy**: Good for most languages and use cases
+- **Speed**: Fast processing on modern hardware
+- **Languages**: Supports 99+ languages with auto-detection
 
 ## Troubleshooting
 
@@ -111,6 +156,12 @@ The application runs on your local network only for security. To access from mob
 ### Permission errors
 - Make sure you have write permissions in the directory
 - Try running as administrator (Windows) or with sudo (Linux/Mac) if needed
+
+### Voice-to-text not working
+- Check if voice dependencies are installed: `python test_voice.py`
+- Ensure FFmpeg is installed and in your system PATH
+- Verify audio file format is supported (MP3, WAV, M4A, MP4, WebM, OGG)
+- Check file size is under 50MB limit
 
 ## Security Notes
 

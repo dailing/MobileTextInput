@@ -12,6 +12,11 @@ import time
 import logging
 import sys
 import platform
+import tempfile
+import os
+import asyncio
+from pathlib import Path
+from fastapi import Request
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +41,15 @@ except ImportError:
     PYNPUT_AVAILABLE = False
     keyboard_controller = None
     logger.warning("⚠️ pynput not available - keyboard simulation disabled")
+
+# Import voice-to-text libraries
+try:
+    import whisper
+    WHISPER_AVAILABLE = True
+    logger.info("✅ OpenAI Whisper loaded successfully")
+except ImportError:
+    WHISPER_AVAILABLE = False
+    logger.warning("⚠️ OpenAI Whisper not available - voice-to-text disabled")
 
 # OS detection and platform-specific setup
 CURRENT_OS = platform.system()
@@ -64,6 +78,100 @@ else:
     logger.info("🪟 Non-macOS detected - will use Ctrl+V for paste operations")
 
 
+class VoiceProcessor:
+    """Handle voice-to-text processing using OpenAI Whisper"""
+    
+    def __init__(self):
+        self.model = None
+        self.model_loaded = False
+        self.supported_formats = {'.mp3', '.wav', '.m4a', '.mp4', '.mpeg', '.mpga', '.webm', '.ogg'}
+        
+        if WHISPER_AVAILABLE:
+            self.load_model()
+        else:
+            logger.error("❌ Whisper not available - voice processing disabled")
+    
+    def load_model(self):
+        """Load the Whisper model (medium model for better accuracy)"""
+        try:
+            logger.info("🔄 Loading Whisper medium model...")
+            self.model = whisper.load_model("medium")
+            self.model_loaded = True
+            logger.info("✅ Whisper medium model loaded successfully")
+            logger.info("📝 Model supports: transcription and translation")
+            logger.info("🌍 Languages: Supports 99 languages")
+        except Exception as e:
+            logger.error(f"❌ Failed to load Whisper model: {e}")
+            self.model_loaded = False
+    
+    def is_supported_format(self, filename):
+        """Check if the audio file format is supported"""
+        return Path(filename).suffix.lower() in self.supported_formats
+    
+    def transcribe_audio(self, audio_file_path, language=None):
+        """
+        Transcribe audio file to text
+        
+        Args:
+            audio_file_path (str): Path to the audio file
+            language (str, optional): Language code (e.g., 'en', 'es', 'fr')
+        
+        Returns:
+            dict: Transcription result with text and metadata
+        """
+        if not self.model_loaded:
+            return {"success": False, "error": "Whisper model not loaded"}
+        
+        if not os.path.exists(audio_file_path):
+            return {"success": False, "error": "Audio file not found"}
+        
+        if not self.is_supported_format(audio_file_path):
+            return {"success": False, "error": "Unsupported audio format"}
+        
+        try:
+            logger.info(f"🎤 Starting transcription: {Path(audio_file_path).name}")
+            start_time = time.time()
+            
+            # Transcribe the audio
+            options = {}
+            if language:
+                options['language'] = language
+            
+            result = self.model.transcribe(audio_file_path, **options)
+            
+            processing_time = time.time() - start_time
+            text = result["text"].strip()
+            
+            logger.info(f"✅ Transcription completed in {processing_time:.2f} seconds")
+            logger.info(f"📝 Transcribed text: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+            logger.info(f"🌍 Detected language: {result.get('language', 'unknown')}")
+            
+            return {
+                "success": True,
+                "text": text,
+                "language": result.get("language"),
+                "processing_time": processing_time,
+                "duration": result.get("duration", 0)
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Transcription failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def get_model_info(self):
+        """Get information about the loaded model"""
+        if not self.model_loaded:
+            return "❌ No model loaded"
+        
+        return {
+            "model": "medium",
+            "size": "~769MB",
+            "accuracy": "Better accuracy for most languages",
+            "speed": "Moderate processing speed",
+            "languages": "99 languages supported"
+        }
+
+
 class TextInputApp:
     def __init__(self):
         self.current_text = ""
@@ -71,8 +179,17 @@ class TextInputApp:
         self.max_history = 10
         self.storage_key = 'shared_text'
         self.history_key = 'shared_history'
-        logger.info("📱 TextInputApp initialized")
         
+        # Initialize voice processor
+        self.voice_processor = VoiceProcessor() if WHISPER_AVAILABLE else None
+        self.voice_enabled = WHISPER_AVAILABLE and self.voice_processor.model_loaded
+        
+        logger.info("📱 TextInputApp initialized")
+        if self.voice_enabled:
+            logger.info("🎤 Voice-to-text functionality enabled")
+        else:
+            logger.warning("⚠️ Voice-to-text functionality disabled")
+    
     def get_local_ip(self):
         """Get the local IP address of the server"""
         try:
@@ -346,6 +463,21 @@ class TextInputApp:
                     color: #666 !important;
                     font-size: 14px !important;
                 }
+                .voice-button {
+                    background-color: #2196F3 !important;
+                    color: white !important;
+                }
+                .upload-button {
+                    background-color: #FF9800 !important;
+                    color: white !important;
+                    border: 2px dashed #FF9800 !important;
+                }
+                .voice-info {
+                    background-color: #E8F5E8 !important;
+                    padding: 10px !important;
+                    border-radius: 5px !important;
+                    margin: 10px 0 !important;
+                }
             </style>
         ''')
         
@@ -380,6 +512,217 @@ class TextInputApp:
                     "Clear Text", 
                     on_click=self.clear_text
                 ).classes('action-button clear-button')
+            
+            # Voice input section
+            if self.voice_enabled:
+                ui.separator()
+                ui.label("Voice to Text:").classes('text-h6')
+                
+                with ui.row().classes('w-full'):
+                    # Push-to-talk button
+                    self.voice_button = ui.button(
+                        "🎤 Hold to Record", 
+                        on_click=None
+                    ).classes('action-button voice-button')
+                
+                # Voice status and info
+                voice_info = self.voice_processor.get_model_info()
+                ui.label(f"✅ Whisper {voice_info['model']} model loaded ({voice_info['size']})").classes('text-caption text-green')
+                ui.label("🎤 Press and hold button to record • Release to transcribe").classes('text-caption')
+                ui.label("🌍 Auto-detects language • Works on mobile devices").classes('text-caption')
+                
+                # Add JavaScript for push-to-talk functionality
+                ui.add_head_html('''
+                    <script>
+                    let mediaRecorder;
+                    let audioChunks = [];
+                    let isRecording = false;
+                    let pollInterval;
+                    
+                    // Function to show status messages
+                    function showStatus(message, type = 'info') {
+                        // Create a temporary notification element
+                        const notification = document.createElement('div');
+                        notification.textContent = message;
+                        notification.style.cssText = `
+                            position: fixed;
+                            top: 20px;
+                            right: 20px;
+                            background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : '#2196F3'};
+                            color: white;
+                            padding: 12px 20px;
+                            border-radius: 4px;
+                            z-index: 9999;
+                            font-size: 14px;
+                            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+                        `;
+                        document.body.appendChild(notification);
+                        
+                        // Remove after 3 seconds
+                        setTimeout(() => {
+                            if (notification.parentNode) {
+                                notification.parentNode.removeChild(notification);
+                            }
+                        }, 3000);
+                    }
+                    
+                    // Function to update text area
+                    function updateTextArea(newText) {
+                        const textarea = document.querySelector('.mobile-textarea textarea');
+                        if (textarea) {
+                            const currentText = textarea.value || '';
+                            const updatedText = currentText ? currentText + '\\n' + newText : newText;
+                            textarea.value = updatedText;
+                            
+                            // Trigger input event to sync with backend
+                            const event = new Event('input', { bubbles: true });
+                            textarea.dispatchEvent(event);
+                            
+                            // Update character count
+                            const charCount = document.querySelector('.text-caption');
+                            if (charCount && charCount.textContent.includes('characters')) {
+                                charCount.textContent = `${updatedText.length} characters`;
+                            }
+                        }
+                    }
+                    
+                    // Function to poll for voice results
+                    function pollForResults() {
+                        fetch('/check-voice-result')
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.success && data.result) {
+                                    const result = data.result;
+                                    updateTextArea(result.text);
+                                    showStatus(
+                                        `Transcribed in ${result.processing_time.toFixed(1)}s (Language: ${result.language})`,
+                                        'success'
+                                    );
+                                    
+                                    // Stop polling
+                                    if (pollInterval) {
+                                        clearInterval(pollInterval);
+                                        pollInterval = null;
+                                    }
+                                }
+                            })
+                            .catch(error => {
+                                console.error('Error polling for results:', error);
+                            });
+                    }
+                    
+                    async function startRecording() {
+                        if (isRecording) return;
+                        
+                        try {
+                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                            mediaRecorder = new MediaRecorder(stream);
+                            audioChunks = [];
+                            
+                            mediaRecorder.ondataavailable = event => {
+                                audioChunks.push(event.data);
+                            };
+                            
+                            mediaRecorder.onstop = async () => {
+                                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                                const audioData = await audioBlob.arrayBuffer();
+                                
+                                // Show processing status
+                                showStatus('Processing recorded audio...', 'info');
+                                
+                                // Send audio data to backend
+                                fetch('/process-audio', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/octet-stream',
+                                    },
+                                    body: audioData
+                                })
+                                .then(response => response.json())
+                                .then(data => {
+                                    if (data.success) {
+                                        // Start polling for results
+                                        pollInterval = setInterval(pollForResults, 100);
+                                        // Also check immediately
+                                        pollForResults();
+                                    } else {
+                                        showStatus(`Transcription failed: ${data.error}`, 'error');
+                                    }
+                                })
+                                .catch(error => {
+                                    console.error('Error processing audio:', error);
+                                    showStatus('Error processing audio', 'error');
+                                });
+                                
+                                // Stop all tracks
+                                stream.getTracks().forEach(track => track.stop());
+                                isRecording = false;
+                            };
+                            
+                            mediaRecorder.start();
+                            isRecording = true;
+                            
+                            // Update button text
+                            const button = document.querySelector('.voice-button');
+                            if (button) {
+                                button.textContent = '🔴 Recording... (Release to stop)';
+                                button.style.backgroundColor = '#f44336';
+                            }
+                            
+                        } catch (error) {
+                            console.error('Error accessing microphone:', error);
+                            showStatus('Error accessing microphone. Please check permissions.', 'error');
+                        }
+                    }
+                    
+                    function stopRecording() {
+                        if (mediaRecorder && isRecording) {
+                            mediaRecorder.stop();
+                            
+                            // Update button text
+                            const button = document.querySelector('.voice-button');
+                            if (button) {
+                                button.textContent = '🎤 Hold to Record';
+                                button.style.backgroundColor = '#2196F3';
+                            }
+                        }
+                    }
+                    
+                    // Add event listeners when page loads
+                    document.addEventListener('DOMContentLoaded', function() {
+                        setTimeout(() => {
+                            const button = document.querySelector('.voice-button');
+                            if (button) {
+                                // Desktop events
+                                button.addEventListener('mousedown', startRecording);
+                                button.addEventListener('mouseup', stopRecording);
+                                button.addEventListener('mouseleave', stopRecording);
+                                
+                                // Mobile events
+                                button.addEventListener('touchstart', (e) => {
+                                    e.preventDefault();
+                                    startRecording();
+                                });
+                                button.addEventListener('touchend', (e) => {
+                                    e.preventDefault();
+                                    stopRecording();
+                                });
+                                button.addEventListener('touchcancel', (e) => {
+                                    e.preventDefault();
+                                    stopRecording();
+                                });
+                            }
+                        }, 100);
+                    });
+                    </script>
+                ''')
+            else:
+                # Show voice unavailable message
+                ui.separator()
+                ui.label("Voice to Text:").classes('text-h6')
+                ui.label("❌ Voice-to-text not available").classes('text-caption text-red')
+                if not WHISPER_AVAILABLE:
+                    ui.label("📦 Install: pip install openai-whisper").classes('text-caption text-red')
             
             # Auto-paste toggle
             with ui.row().classes('w-full justify-center'):
@@ -583,11 +926,241 @@ class TextInputApp:
                                 on_click=lambda e, text=entry['text']: self.paste_from_history(text)
                             ).classes('copy-button')
 
+    async def handle_audio_upload(self, event):
+        """Handle audio file upload and transcription"""
+        if not self.voice_enabled:
+            self.show_status("Voice-to-text is not available", "error")
+            return
+        
+        if not event.content:
+            self.show_status("No audio file selected", "error")
+            return
+        
+        try:
+            # Show processing status
+            self.show_status("Processing audio file...", "info")
+            logger.info(f"🎤 Processing uploaded audio file: {event.name}")
+            
+            # Save uploaded file temporarily
+            with tempfile.NamedTemporaryFile(delete=False, suffix=Path(event.name).suffix) as temp_file:
+                # Fix: Read content from SpooledTemporaryFile properly
+                if hasattr(event.content, 'read'):
+                    # If it's a file-like object, read its content
+                    event.content.seek(0)  # Ensure we're at the beginning
+                    audio_data = event.content.read()
+                else:
+                    # If it's already bytes
+                    audio_data = event.content
+                
+                temp_file.write(audio_data)
+                temp_file_path = temp_file.name
+            
+            # Transcribe the audio
+            result = await asyncio.to_thread(
+                self.voice_processor.transcribe_audio, 
+                temp_file_path
+            )
+            
+            # Clean up temp file
+            try:
+                os.unlink(temp_file_path)
+            except OSError:
+                pass
+            
+            if result["success"]:
+                transcribed_text = result["text"]
+                processing_time = result.get("processing_time", 0)
+                language = result.get("language", "unknown")
+                
+                if transcribed_text:
+                    # Add transcribed text to the text area
+                    current_text = self.text_area.value or ""
+                    if current_text:
+                        new_text = current_text + "\n" + transcribed_text
+                    else:
+                        new_text = transcribed_text
+                    
+                    self.text_area.set_value(new_text)
+                    self.current_text = new_text
+                    self.char_count.set_text(f"{len(new_text)} characters")
+                    self.sync_to_storage()
+                    
+                    # Add to history
+                    self.add_to_history(transcribed_text)
+                    self.update_history_display()
+                    
+                    # Show success status
+                    self.show_status(
+                        f"Transcribed in {processing_time:.1f}s (Language: {language})", 
+                        "success"
+                    )
+                    logger.info(f"✅ Audio transcription successful: {len(transcribed_text)} characters")
+                else:
+                    self.show_status("No speech detected in audio", "error")
+                    logger.warning("⚠️ No speech detected in uploaded audio")
+            else:
+                error_msg = result.get("error", "Unknown error")
+                self.show_status(f"Transcription failed: {error_msg}", "error")
+                logger.error(f"❌ Audio transcription failed: {error_msg}")
+                
+        except Exception as e:
+            self.show_status(f"Error processing audio: {str(e)}", "error")
+            logger.error(f"❌ Audio processing error: {e}")
+    
+    async def process_audio_data(self, audio_data):
+        """Process raw audio data without UI updates (for API calls)"""
+        if not self.voice_enabled:
+            return {"success": False, "error": "Voice-to-text is not available"}
+        
+        try:
+            logger.info("🎤 Processing push-to-talk audio recording")
+            
+            # Save audio data temporarily
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+                temp_file.write(audio_data)
+                temp_file_path = temp_file.name
+            
+            # Transcribe the audio
+            result = await asyncio.to_thread(
+                self.voice_processor.transcribe_audio, 
+                temp_file_path
+            )
+            
+            # Clean up temp file
+            try:
+                os.unlink(temp_file_path)
+            except OSError:
+                pass
+            
+            if result["success"]:
+                transcribed_text = result["text"]
+                processing_time = result.get("processing_time", 0)
+                language = result.get("language", "unknown")
+                
+                if transcribed_text:
+                    # Store result in app storage for UI to pick up
+                    app.storage.user['voice_result'] = {
+                        'text': transcribed_text,
+                        'processing_time': processing_time,
+                        'language': language,
+                        'timestamp': time.time()
+                    }
+                    
+                    logger.info(f"✅ Push-to-talk transcription successful: {len(transcribed_text)} characters")
+                    return {
+                        "success": True, 
+                        "text": transcribed_text,
+                        "processing_time": processing_time,
+                        "language": language
+                    }
+                else:
+                    logger.warning("⚠️ No speech detected in push-to-talk recording")
+                    return {"success": False, "error": "No speech detected in recording"}
+            else:
+                error_msg = result.get("error", "Unknown error")
+                logger.error(f"❌ Push-to-talk transcription failed: {error_msg}")
+                return {"success": False, "error": error_msg}
+                
+        except Exception as e:
+            logger.error(f"❌ Push-to-talk audio processing error: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def handle_audio_data(self, audio_data):
+        """Handle raw audio data from push-to-talk recording (with UI updates)"""
+        if not self.voice_enabled:
+            self.show_status("Voice-to-text is not available", "error")
+            return
+        
+        try:
+            # Show processing status
+            self.show_status("Processing recorded audio...", "info")
+            
+            # Process audio data
+            result = await self.process_audio_data(audio_data)
+            
+            if result["success"]:
+                transcribed_text = result["text"]
+                processing_time = result.get("processing_time", 0)
+                language = result.get("language", "unknown")
+                
+                # Add transcribed text to the text area
+                current_text = self.text_area.value or ""
+                if current_text:
+                    new_text = current_text + "\n" + transcribed_text
+                else:
+                    new_text = transcribed_text
+                
+                self.text_area.set_value(new_text)
+                self.current_text = new_text
+                self.char_count.set_text(f"{len(new_text)} characters")
+                self.sync_to_storage()
+                
+                # Add to history
+                self.add_to_history(transcribed_text)
+                self.update_history_display()
+                
+                # Show success status
+                self.show_status(
+                    f"Transcribed in {processing_time:.1f}s (Language: {language})", 
+                    "success"
+                )
+            else:
+                error_msg = result.get("error", "Unknown error")
+                self.show_status(f"Transcription failed: {error_msg}", "error")
+                
+        except Exception as e:
+            self.show_status(f"Error processing recorded audio: {str(e)}", "error")
+            logger.error(f"❌ Push-to-talk audio processing error: {e}")
+    
+    def start_voice_recording(self):
+        """Start voice recording (placeholder for future implementation)"""
+        if not self.voice_enabled:
+            self.show_status("Voice-to-text is not available", "error")
+            return
+        
+        # This would be implemented with WebRTC MediaRecorder API in the future
+        self.show_status("Voice recording not yet implemented. Please use file upload.", "info")
+        logger.info("🎤 Voice recording requested (not yet implemented)")
+
 
 def main():
     """Main function to run the application"""
     # Create the app instance
     text_app = TextInputApp()
+    
+    # Add API endpoint for processing recorded audio
+    @app.post("/process-audio")
+    async def process_audio(request: Request):
+        """Handle recorded audio data from push-to-talk"""
+        try:
+            # Read the raw audio data
+            audio_data = await request.body()
+            
+            if not audio_data:
+                return {"success": False, "error": "No audio data received"}
+            
+            # Process the audio using the non-UI method
+            result = await text_app.process_audio_data(audio_data)
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ API audio processing error: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @app.get("/check-voice-result")
+    async def check_voice_result():
+        """Check for new voice transcription results"""
+        try:
+            if 'voice_result' in app.storage.user:
+                result = app.storage.user['voice_result']
+                # Clear the result after reading
+                del app.storage.user['voice_result']
+                return {"success": True, "result": result}
+            else:
+                return {"success": False, "message": "No new results"}
+        except Exception as e:
+            logger.error(f"❌ Error checking voice result: {e}")
+            return {"success": False, "error": str(e)}
     
     # Create the UI
     text_app.create_ui()

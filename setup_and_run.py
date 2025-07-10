@@ -128,15 +128,50 @@ def check_requirements_installed():
     if not success:
         return False
     
-    # Check for required packages
-    required_packages = ['nicegui', 'pyperclip', 'pynput']
+    # Check for core required packages
+    core_packages = ['nicegui', 'pyperclip', 'pynput']
     installed_packages = stdout.lower()
     
-    for package in required_packages:
+    for package in core_packages:
         if package not in installed_packages:
             return False
     
     return True
+
+
+def check_voice_requirements():
+    """Check if voice-to-text requirements are installed"""
+    pip_path = get_venv_pip()
+    
+    if not pip_path.exists():
+        return False, []
+    
+    success, stdout, stderr = run_command(f'"{pip_path}" list', check=False)
+    
+    if not success:
+        return False, []
+    
+    # Check for voice packages
+    voice_packages = ['openai-whisper', 'librosa', 'soundfile', 'pydub']
+    installed_packages = stdout.lower()
+    
+    missing_packages = []
+    for package in voice_packages:
+        # Handle package name variations
+        package_check = package.replace('-', '_')  # openai-whisper -> openai_whisper
+        if package not in installed_packages and package_check not in installed_packages:
+            missing_packages.append(package)
+    
+    return len(missing_packages) == 0, missing_packages
+
+
+def check_ffmpeg():
+    """Check if FFmpeg is available"""
+    try:
+        success, stdout, stderr = run_command('ffmpeg -version', check=False)
+        return success
+    except:
+        return False
 
 
 def run_application():
@@ -151,12 +186,33 @@ def run_application():
         print("Error: main.py not found")
         return False
     
+    # Check voice functionality status
+    voice_available, missing_voice = check_voice_requirements()
+    ffmpeg_available = check_ffmpeg()
+    
     print("Starting application...")
-    print("=" * 50)
+    print("=" * 60)
     print("Mobile Text Input Web Application")
     print("Access from your mobile device using your computer's IP address")
+    print("")
+    
+    # Show feature status
+    print("📱 Core Features: ✅ Available")
+    if voice_available and ffmpeg_available:
+        print("🎤 Voice-to-Text: ✅ Available")
+    elif voice_available and not ffmpeg_available:
+        print("🎤 Voice-to-Text: ⚠️ Partially Available (FFmpeg missing)")
+        print("   Install FFmpeg for full voice functionality")
+    elif not voice_available and ffmpeg_available:
+        print("🎤 Voice-to-Text: ⚠️ Partially Available (Python packages missing)")
+        print(f"   Missing: {', '.join(missing_voice)}")
+    else:
+        print("🎤 Voice-to-Text: ❌ Not Available")
+        print("   Install voice packages and FFmpeg for voice functionality")
+    
+    print("")
     print("Press Ctrl+C to stop the server")
-    print("=" * 50)
+    print("=" * 60)
     
     # Run the application (this will block until stopped)
     try:
@@ -169,11 +225,36 @@ def run_application():
         return False
 
 
+def test_voice_functionality():
+    """Test if voice functionality is working"""
+    python_path = get_venv_python()
+    
+    if not python_path.exists():
+        return False
+    
+    if not Path("test_voice.py").exists():
+        print("⚠️ test_voice.py not found, skipping voice test")
+        return True  # Don't fail if test file is missing
+    
+    print("🧪 Testing voice functionality...")
+    try:
+        success, stdout, stderr = run_command(f'"{python_path}" test_voice.py', check=False)
+        
+        if success:
+            print("✅ Voice functionality test passed")
+            return True
+        else:
+            print(f"❌ Voice functionality test failed: {stderr}")
+            return False
+    except Exception as e:
+        print(f"❌ Voice test error: {e}")
+        return False
+
+
 def main():
     """Main setup and run function"""
     print("Mobile Text Input Web Application - Setup and Run")
     print("=" * 50)
-    
     # Check Python version
     if not check_python_version():
         return 1
@@ -182,13 +263,93 @@ def main():
     if not create_virtual_environment():
         return 1
     
-    # Install requirements if needed
+    # Install core requirements if needed
     if not check_requirements_installed():
-        print("Installing requirements...")
+        print("Installing core requirements...")
         if not install_requirements():
             return 1
     else:
-        print("Requirements already installed")
+        print("Core requirements already installed")
+    
+    # Check voice requirements
+    voice_available, missing_voice = check_voice_requirements()
+    ffmpeg_available = check_ffmpeg()
+    
+    if not voice_available:
+        print("\n" + "=" * 50)
+        print("Voice-to-Text Setup (Optional)")
+        print("=" * 50)
+        print("⚠️ Voice-to-text packages not found")
+        print(f"Missing packages: {', '.join(missing_voice)}")
+        print("")
+        print("To enable voice functionality, run:")
+        print(f"  {get_venv_pip()} install {' '.join(missing_voice)}")
+        print("")
+        
+        # Ask user if they want to install voice packages
+        try:
+            response = input("Install voice packages now? (y/N): ").strip().lower()
+            if response in ['y', 'yes']:
+                print("Installing voice packages...")
+                pip_path = get_venv_pip()
+                voice_packages_str = ' '.join(missing_voice)
+                
+                # Try with mirror first
+                success, stdout, stderr = run_command(
+                    f'"{pip_path}" install {voice_packages_str} -i https://mirrors.ustc.edu.cn/pypi/simple',
+                    check=False
+                )
+                
+                if not success:
+                    print("Mirror failed, trying default PyPI...")
+                    success, stdout, stderr = run_command(
+                        f'"{pip_path}" install {voice_packages_str}',
+                        check=False
+                    )
+                
+                if success:
+                    print("✅ Voice packages installed successfully")
+                    voice_available = True
+                    
+                    # Test voice functionality after installation
+                    if ffmpeg_available:
+                        test_voice_functionality()
+                    else:
+                        print("⚠️ Install FFmpeg to complete voice setup")
+                else:
+                    print(f"❌ Failed to install voice packages: {stderr}")
+                    print("You can install them manually later")
+            else:
+                print("Skipping voice package installation")
+        except (KeyboardInterrupt, EOFError):
+            print("\nSkipping voice package installation")
+    else:
+        # Voice packages are available, test if requested
+        if ffmpeg_available:
+            try:
+                response = input("Test voice functionality? (Y/n): ").strip().lower()
+                if response not in ['n', 'no']:
+                    test_voice_functionality()
+            except (KeyboardInterrupt, EOFError):
+                print("\nSkipping voice test")
+    
+    if not ffmpeg_available:
+        print("\n" + "=" * 50)
+        print("FFmpeg Setup (Required for Voice)")
+        print("=" * 50)
+        print("⚠️ FFmpeg not found")
+        print("FFmpeg is required for voice-to-text functionality")
+        print("")
+        print("Install FFmpeg:")
+        print("  Windows: choco install ffmpeg")
+        print("  macOS: brew install ffmpeg")
+        print("  Linux: sudo apt install ffmpeg")
+        print("")
+    
+    # Final status
+    print("\n" + "=" * 50)
+    print("Setup Complete")
+    print("=" * 50)
     
     # Run the application
     if not run_application():
@@ -198,4 +359,5 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main()) 
+    status = main()
+    sys.exit(status)
