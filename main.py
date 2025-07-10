@@ -24,7 +24,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('mobile_text_input.log')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -760,6 +759,22 @@ class TextInputApp:
                     font-weight: 600 !important;
                     color: #333 !important;
                 }
+                
+                /* Recording animation */
+                @keyframes pulse-red {
+                    0% {
+                        transform: scale(1);
+                        box-shadow: 0 0 15px rgba(211, 47, 47, 0.5);
+                    }
+                    50% {
+                        transform: scale(1.05);
+                        box-shadow: 0 0 25px rgba(211, 47, 47, 0.8);
+                    }
+                    100% {
+                        transform: scale(1);
+                        box-shadow: 0 0 15px rgba(211, 47, 47, 0.5);
+                    }
+                }
             </style>
         ''')
         
@@ -793,7 +808,7 @@ class TextInputApp:
                 # Add voice button if available
                 if self.voice_enabled:
                     self.voice_button = ui.button(
-                        "Record", 
+                        "Start Recording", 
                         on_click=None
                     ).classes('action-button voice-button')
                 
@@ -848,7 +863,7 @@ class TextInputApp:
                     # Voice status
                     if self.voice_enabled:
                         voice_info = self.voice_processor.get_model_info()
-                        ui.label(f"🎤 Voice: Whisper {voice_info['model']} ready • Hold Record button").classes('text-caption text-green')
+                        ui.label(f"🎤 Voice: Whisper {voice_info['model']} ready • Button turns red when recording").classes('text-caption text-green')
                     else:
                         ui.label("❌ Voice-to-text not available").classes('text-caption text-red')
                         if not WHISPER_AVAILABLE:
@@ -876,6 +891,54 @@ class TextInputApp:
                     let audioChunks = [];
                     let isRecording = false;
                     let pollInterval;
+                    let microphonePermissionGranted = false;
+                    let audioStream = null;
+                    
+                    // Function to request microphone permissions upfront
+                    async function requestMicrophonePermission() {
+                        try {
+                            // Request microphone access
+                            audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                            microphonePermissionGranted = true;
+                            
+                            // Update button state to ready for recording
+                            const button = document.querySelector('.voice-button');
+                            if (button) {
+                                button.disabled = false;
+                                button.textContent = 'Start Recording';
+                                button.style.opacity = '1';
+                                button.style.backgroundColor = '#2196F3';
+                                button.style.color = 'white';
+                                button.style.border = 'none';
+                                button.style.boxShadow = 'none';
+                                button.style.fontWeight = 'normal';
+                                button.style.animation = 'none';
+                            }
+                            
+                            // Show success message
+                            showStatus('Microphone access granted! Ready to record.', 'success');
+                            
+                            // Stop the stream for now - we'll create a new one when recording
+                            audioStream.getTracks().forEach(track => track.stop());
+                            audioStream = null;
+                            
+                        } catch (error) {
+                            console.error('Error requesting microphone permission:', error);
+                            microphonePermissionGranted = false;
+                            
+                            // Update button state
+                            const button = document.querySelector('.voice-button');
+                            if (button) {
+                                button.disabled = true;
+                                button.textContent = 'Microphone Access Denied';
+                                button.style.opacity = '0.5';
+                                button.style.backgroundColor = '#757575';
+                            }
+                            
+                            // Show error message
+                            showStatus('Microphone access denied. Please enable microphone permissions in your browser settings.', 'error');
+                        }
+                    }
                     
                     // Function to show status messages
                     function showStatus(message, type = 'info') {
@@ -952,9 +1015,16 @@ class TextInputApp:
                     async function startRecording() {
                         if (isRecording) return;
                         
+                        // Check if microphone permission was granted
+                        if (!microphonePermissionGranted) {
+                            showStatus('Microphone access not granted. Please allow microphone access and refresh the page.', 'error');
+                            return;
+                        }
+                        
                         try {
-                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                            mediaRecorder = new MediaRecorder(stream);
+                            // Request fresh stream for recording
+                            audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                            mediaRecorder = new MediaRecorder(audioStream);
                             audioChunks = [];
                             
                             mediaRecorder.ondataavailable = event => {
@@ -993,18 +1063,27 @@ class TextInputApp:
                                 });
                                 
                                 // Stop all tracks
-                                stream.getTracks().forEach(track => track.stop());
+                                if (audioStream) {
+                                    audioStream.getTracks().forEach(track => track.stop());
+                                    audioStream = null;
+                                }
                                 isRecording = false;
                             };
                             
                             mediaRecorder.start();
                             isRecording = true;
                             
-                            // Update button text
+                            // Update button text and style for recording state
                             const button = document.querySelector('.voice-button');
                             if (button) {
-                                button.textContent = '🔴';
-                                button.style.backgroundColor = '#f44336';
+                                button.textContent = '🔴 Recording... (Click to Stop)';
+                                button.style.backgroundColor = '#d32f2f';
+                                button.style.color = 'white';
+                                button.style.border = '2px solid #b71c1c';
+                                button.style.boxShadow = '0 0 15px rgba(211, 47, 47, 0.5)';
+                                button.style.fontWeight = 'bold';
+                                // Add pulsing animation
+                                button.style.animation = 'pulse-red 1.5s infinite';
                             }
                             
                         } catch (error) {
@@ -1017,12 +1096,26 @@ class TextInputApp:
                         if (mediaRecorder && isRecording) {
                             mediaRecorder.stop();
                             
-                            // Update button text
+                            // Reset button text and style to normal state
                             const button = document.querySelector('.voice-button');
                             if (button) {
-                                button.textContent = 'Record';
+                                button.textContent = 'Start Recording';
                                 button.style.backgroundColor = '#2196F3';
+                                button.style.color = 'white';
+                                button.style.border = 'none';
+                                button.style.boxShadow = 'none';
+                                button.style.fontWeight = 'normal';
+                                button.style.animation = 'none';
                             }
+                        }
+                    }
+                    
+                    // Toggle recording function
+                    function toggleRecording() {
+                        if (isRecording) {
+                            stopRecording();
+                        } else {
+                            startRecording();
                         }
                     }
                     
@@ -1031,24 +1124,24 @@ class TextInputApp:
                         setTimeout(() => {
                             const button = document.querySelector('.voice-button');
                             if (button) {
-                                // Desktop events
-                                button.addEventListener('mousedown', startRecording);
-                                button.addEventListener('mouseup', stopRecording);
-                                button.addEventListener('mouseleave', stopRecording);
+                                // Initialize button as disabled until permission is granted
+                                button.disabled = true;
+                                button.textContent = 'Requesting Microphone...';
+                                button.style.opacity = '0.5';
                                 
-                                // Mobile events
-                                button.addEventListener('touchstart', (e) => {
+                                // Single click event for both desktop and mobile
+                                button.addEventListener('click', (e) => {
                                     e.preventDefault();
-                                    startRecording();
+                                    toggleRecording();
                                 });
-                                button.addEventListener('touchend', (e) => {
+                                
+                                // Prevent context menu on long press (mobile)
+                                button.addEventListener('contextmenu', (e) => {
                                     e.preventDefault();
-                                    stopRecording();
                                 });
-                                button.addEventListener('touchcancel', (e) => {
-                                    e.preventDefault();
-                                    stopRecording();
-                                });
+                                
+                                // Request microphone permission
+                                requestMicrophonePermission();
                             }
                         }, 100);
                     });
