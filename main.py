@@ -17,6 +17,7 @@ import os
 import asyncio
 from pathlib import Path
 from fastapi import Request
+import subprocess
 
 # Configure logging
 logging.basicConfig(
@@ -182,6 +183,9 @@ class TextInputApp:
         # Initialize voice processor
         self.voice_processor = VoiceProcessor() if WHISPER_AVAILABLE else None
         self.voice_enabled = WHISPER_AVAILABLE and self.voice_processor.model_loaded
+        
+        # Initialize instance management
+        self.cursor_instances = []
         
         logger.info("📱 TextInputApp initialized")
         if self.voice_enabled:
@@ -615,7 +619,6 @@ class TextInputApp:
                 self.current_text = stored_text
                 if hasattr(self, 'text_area'):
                     self.text_area.set_value(stored_text)
-                    self.char_count.set_text(f"{len(stored_text)} characters")
             
             # Load history from storage
             stored_history = app.storage.general.get(self.history_key, [])
@@ -760,6 +763,27 @@ class TextInputApp:
                     color: #333 !important;
                 }
                 
+                .instance-tab-selected {
+                    background-color: #4CAF50 !important;
+                    color: white !important;
+                    border: 2px solid #4CAF50 !important;
+                    font-weight: bold !important;
+                }
+                
+                .instance-tab {
+                    background-color: #f5f5f5 !important;
+                    color: #333 !important;
+                    border: 1px solid #ddd !important;
+                }
+                
+                .instance-section {
+                    background-color: #f0f8ff !important;
+                    border-radius: 8px !important;
+                    padding: 15px !important;
+                    margin: 10px 0 !important;
+                    border-left: 4px solid #2196F3 !important;
+                }
+                
                 /* Recording animation */
                 @keyframes pulse-red {
                     0% {
@@ -778,20 +802,79 @@ class TextInputApp:
             </style>
         ''')
         
-        # Header
-        ui.label(f"Server: {self.get_local_ip()}:8080")
+        # Instance Management Tabs (macOS only)
+        if IS_MACOS:
+            # Auto-refresh instances on page load
+            self.refresh_cursor_instances()
+            
+            # Create tabs for instances if any exist
+            if self.cursor_instances:
+                with ui.tabs().classes('w-full') as tabs:
+                    self.instance_tabs = {}
+                    for instance in self.cursor_instances:
+                        workspace = instance.get('Workspace', f"Window {instance.get('ID')}")
+                        tab = ui.tab(workspace)
+                        self.instance_tabs[workspace] = {
+                            'tab': tab,
+                            'instance': instance
+                        }
+                
+                # Tab panels (empty since tabs show the selection)
+                with ui.tab_panels(tabs, value=None).classes('w-full') as panels:
+                    for workspace in self.instance_tabs:
+                        with ui.tab_panel(self.instance_tabs[workspace]['tab']):
+                            pass  # Empty panel - tabs show the selection
+                
+                # Handle tab selection with proper event binding
+                def on_tab_change(e):
+                    # Get the selected workspace from event args
+                    selected_workspace = e.args if hasattr(e, 'args') and e.args else None
+                    
+                    logger.info(f"🎯 Tab clicked: {selected_workspace}")
+                    
+                    if selected_workspace and selected_workspace in self.instance_tabs:
+                        instance = self.instance_tabs[selected_workspace]['instance']
+                        logger.info(f"🎯 Activating instance: {instance}")
+                        success = self.activate_cursor_instance_macos(instance)
+                        if success:
+                            logger.info(f"✅ Successfully activated workspace: {selected_workspace}")
+                        else:
+                            logger.error(f"❌ Failed to activate workspace: {selected_workspace}")
+                            self.show_status(f"Failed to activate {selected_workspace}", "error")
+                    else:
+                        logger.warning(f"⚠️ Workspace not found: {selected_workspace}")
+                
+                # Try multiple event binding approaches
+                tabs.on('update:model-value', on_tab_change)
+                
+                # Alternative: bind to panels value change (for redundancy)
+                def on_panel_change(e):
+                    # Get the selected workspace from event args
+                    selected_workspace = e.args if hasattr(e, 'args') and e.args else None
+                    
+                    logger.info(f"🎯 Panel changed to: {selected_workspace}")
+                    
+                    if selected_workspace and selected_workspace in self.instance_tabs:
+                        instance = self.instance_tabs[selected_workspace]['instance']
+                        logger.info(f"🎯 Activating instance: {instance}")
+                        success = self.activate_cursor_instance_macos(instance)
+                        if success:
+                            logger.info(f"✅ Successfully activated workspace: {selected_workspace}")
+                        else:
+                            logger.error(f"❌ Failed to activate workspace: {selected_workspace}")
+                            self.show_status(f"Failed to activate {selected_workspace}", "error")
+                    else:
+                        logger.warning(f"⚠️ Workspace not found: {selected_workspace}")
+                
+                panels.on('update:model-value', on_panel_change)
         
         # Main content container
         with ui.column().classes('text-input-container'):
             # Text input area
-            ui.label("Enter your text:").classes('text-h6')
             self.text_area = ui.textarea(
                 placeholder="Type your text here...",
                 value=""
             ).classes('mobile-textarea')
-            
-            # Character count
-            self.char_count = ui.label("0 characters").classes('text-caption')
             
             # Action buttons (including voice if available)
             with ui.row().classes('w-full'):
@@ -978,12 +1061,6 @@ class TextInputApp:
                             // Trigger input event to sync with backend
                             const event = new Event('input', { bubbles: true });
                             textarea.dispatchEvent(event);
-                            
-                            // Update character count
-                            const charCount = document.querySelector('.text-caption');
-                            if (charCount && charCount.textContent.includes('characters')) {
-                                charCount.textContent = `${updatedText.length} characters`;
-                            }
                         }
                     }
                     
@@ -1172,9 +1249,6 @@ class TextInputApp:
         text = event.value if event.value else ""
         self.current_text = text  # Keep internal state synchronized
         
-        # Update character count
-        self.char_count.set_text(f"{len(text)} characters")
-        
         # Sync to storage for cross-device synchronization
         self.sync_to_storage()
     
@@ -1198,7 +1272,6 @@ class TextInputApp:
             logger.info("🗑️ Clearing text area after successful copy")
             self.text_area.set_value("")
             self.current_text = ""
-            self.char_count.set_text("0 characters")
             self.sync_to_storage()
             
             # Auto-paste if enabled
@@ -1304,7 +1377,6 @@ class TextInputApp:
         logger.info("🗑️ Clearing text area and syncing across devices")
         self.text_area.set_value("")
         self.current_text = ""
-        self.char_count.set_text("0 characters")
         
         # Clear storage for cross-device synchronization
         self.sync_to_storage()
@@ -1419,7 +1491,6 @@ class TextInputApp:
                     
                     self.text_area.set_value(new_text)
                     self.current_text = new_text
-                    self.char_count.set_text(f"{len(new_text)} characters")
                     self.sync_to_storage()
                     
                     # Add to history
@@ -1529,7 +1600,6 @@ class TextInputApp:
                 
                 self.text_area.set_value(new_text)
                 self.current_text = new_text
-                self.char_count.set_text(f"{len(new_text)} characters")
                 self.sync_to_storage()
                 
                 # Add to history
@@ -1558,6 +1628,320 @@ class TextInputApp:
         # This would be implemented with WebRTC MediaRecorder API in the future
         self.show_status("Voice recording not yet implemented. Please use file upload.", "info")
         logger.info("🎤 Voice recording requested (not yet implemented)")
+
+    def get_cursor_instances_macos(self):
+        """Get all Cursor instances on macOS using AppleScript"""
+        # First, let's try to just count windows to see if we can access them
+        count_script = '''
+        tell application "System Events"
+            set cursorProcesses to every application process whose name is "Cursor"
+            set totalWindows to 0
+            repeat with cursorProcess in cursorProcesses
+                set windowList to every window of cursorProcess
+                set totalWindows to totalWindows + (count of windowList)
+            end repeat
+            return totalWindows as string
+        end tell
+        '''
+        
+        try:
+            logger.info("🔍 First testing window count...")
+            result = subprocess.run(
+                ["osascript", "-e", count_script],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.info(f"📋 Window count result: '{result.stdout}'")
+            
+            if result.stdout.strip() == "0":
+                logger.warning("⚠️ No Cursor windows found")
+                return []
+            
+        except Exception as e:
+            logger.error(f"❌ Window count test failed: {e}")
+            return []
+        
+        # Now try to get window names with a different approach
+        # Let's try building the result differently
+        window_script = '''
+        tell application "System Events"
+            set cursorProcesses to every application process whose name is "Cursor"
+            set windowNames to {}
+            
+            repeat with cursorProcess in cursorProcesses
+                set windowList to every window of cursorProcess
+                repeat with currentWindow in windowList
+                    try
+                        set windowName to name of currentWindow
+                        if windowName is not "" then
+                            set end of windowNames to windowName
+                        end if
+                    end try
+                end repeat
+            end repeat
+            
+            -- Convert list to string manually
+            set resultString to ""
+            repeat with i from 1 to count of windowNames
+                set resultString to resultString & item i of windowNames
+                if i < count of windowNames then
+                    set resultString to resultString & "|"
+                end if
+            end repeat
+            
+            return resultString
+        end tell
+        '''
+        
+        try:
+            logger.info("🔍 Running window names script...")
+            result = subprocess.run(
+                ["osascript", "-e", window_script],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            if result.stdout.strip():
+                window_names = result.stdout.strip().split('|')
+                logger.info(f"📋 Found window names: {window_names}")
+                
+                instances = []
+                for i, window_name in enumerate(window_names):
+                    if window_name.strip():
+                        # Extract workspace name from window title
+                        # Format: "filename — workspace"
+                        workspace_name = "Unknown"
+                        if " — " in window_name:  # Using em dash
+                            parts = window_name.split(" — ")
+                            if len(parts) >= 2:
+                                workspace_name = parts[1].strip()  # Take the part after the em dash
+                        elif " - " in window_name:  # Fallback for regular dash
+                            parts = window_name.split(" - ")
+                            if len(parts) >= 2:
+                                workspace_name = parts[1].strip()
+                        
+                        instance_info = {
+                            'ID': str(i + 1),
+                            'Title': window_name.strip(),
+                            'Workspace': workspace_name
+                        }
+                        instances.append(instance_info)
+                
+                logger.info(f"🔍 Found {len(instances)} Cursor instances")
+                return instances
+            else:
+                logger.warning("⚠️ Window names script returned empty output")
+                return []
+                
+        except subprocess.CalledProcessError as e:
+            logger.error(f"❌ Window names script failed: {e}")
+            logger.error(f"❌ Return code: {e.returncode}")
+            logger.error(f"❌ Stdout: {e.stdout}")
+            logger.error(f"❌ Stderr: {e.stderr}")
+            return []
+        except Exception as e:
+            logger.error(f"❌ Unexpected error: {e}")
+            return []
+    
+    def activate_cursor_instance_macos(self, instance_info):
+        """Activate specific Cursor instance on macOS"""
+        window_id = instance_info.get('ID', '1')
+        workspace = instance_info.get('Workspace', 'Unknown')
+        title = instance_info.get('Title', 'Unknown')
+        
+        logger.info("🎯 Attempting to activate Cursor instance:")
+        logger.info(f"   - Window ID: {window_id}")
+        logger.info(f"   - Workspace: {workspace}")
+        logger.info(f"   - Title: {title}")
+        
+        # Try a more reliable approach: activate by window name instead of index
+        escaped_title = title.replace('"', '\\"')  # Escape quotes in window title
+        
+        script = f'''
+        tell application "System Events"
+            tell application process "Cursor"
+                set frontmost to true
+                try
+                    -- Get window count first
+                    set windowCount to count of windows
+                    log "Total windows: " & windowCount
+                    
+                    -- Try to find and activate the window by name
+                    set targetWindow to first window whose name is "{escaped_title}"
+                    
+                    -- Bring the target window to front using different methods
+                    try
+                        -- Method 1: Set index to 1
+                        set index of targetWindow to 1
+                        log "Method 1 (set index) succeeded"
+                    on error
+                        try
+                            -- Method 2: Perform action (click)
+                            perform action "AXRaise" of targetWindow
+                            log "Method 2 (AXRaise) succeeded"
+                        on error
+                            -- Method 3: Simple click
+                            click targetWindow
+                            log "Method 3 (click) succeeded"
+                        end try
+                    end try
+                    
+                    -- Verify the window is now frontmost
+                    set frontWindow to window 1
+                    set frontWindowName to name of frontWindow
+                    log "Front window is now: " & frontWindowName
+                    
+                    return "success:" & frontWindowName
+                on error errMsg
+                    log "Error: " & errMsg
+                    return "error:" & errMsg
+                end try
+            end tell
+        end tell
+        '''
+        
+        try:
+            logger.info("🍎 Executing AppleScript for window activation...")
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            output = result.stdout.strip()
+            logger.info(f"🍎 AppleScript output: '{output}'")
+            
+            if "success:" in output:
+                activated_window = output.split("success:")[1]
+                logger.info(f"✅ Successfully activated window: '{activated_window}'")
+                logger.info(f"✅ Target was: '{title}'")
+                return True
+            elif "error:" in output:
+                error_msg = output.split("error:")[1]
+                logger.error(f"❌ AppleScript error: {error_msg}")
+                
+                # Try simpler fallback approach - target Cursor app directly
+                logger.info("🔄 Trying simpler fallback approach...")
+                simple_script = f'''
+                tell application "Cursor"
+                    activate
+                    try
+                        -- Try to bring specific window to front
+                        set targetWindow to first window whose name contains "{workspace}"
+                        set index of targetWindow to 1
+                        return "fallback_success"
+                    on error
+                        -- Just activate the app
+                        return "app_activated"
+                    end try
+                end tell
+                '''
+                
+                try:
+                    fallback_result = subprocess.run(
+                        ["osascript", "-e", simple_script],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    
+                    fallback_output = fallback_result.stdout.strip()
+                    logger.info(f"🔄 Fallback result: '{fallback_output}'")
+                    
+                    if "success" in fallback_output or "activated" in fallback_output:
+                        logger.info(f"✅ Fallback activation succeeded for workspace: {workspace}")
+                        return True
+                    
+                except Exception as fallback_error:
+                    logger.error(f"❌ Fallback approach also failed: {fallback_error}")
+                
+                return False
+            else:
+                logger.error(f"❌ Unexpected AppleScript output: {output}")
+                return False
+                
+        except subprocess.CalledProcessError as e:
+            logger.error(f"❌ Failed to execute AppleScript: {e}")
+            logger.error(f"❌ Return code: {e.returncode}")
+            logger.error(f"❌ Stdout: {e.stdout}")
+            logger.error(f"❌ Stderr: {e.stderr}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Unexpected error during window activation: {e}")
+            return False
+    
+    def test_applescript_debug(self):
+        """Test AppleScript execution for debugging"""
+        logger.info("🔧 DEBUG: Testing AppleScript execution...")
+        logger.info("🔧 DEBUG: Note - If this fails, you may need to grant Terminal/Python accessibility permissions")
+        logger.info("🔧 DEBUG: Go to System Preferences > Security & Privacy > Privacy > Accessibility")
+        logger.info("🔧 DEBUG: Add Terminal or Python to the list of allowed apps")
+        
+        # Test 1: Very simple script
+        test_script = '''
+        tell application "System Events"
+            return "AppleScript is working"
+        end tell
+        '''
+        
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", test_script],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.info(f"🔧 DEBUG: Simple test result: '{result.stdout}'")
+        except Exception as e:
+            logger.error(f"🔧 DEBUG: Simple test failed: {e}")
+            return
+        
+        # Test 2: Check if Cursor process exists
+        cursor_test_script = '''
+        tell application "System Events"
+            set appList to name of every application process
+            return appList as string
+        end tell
+        '''
+        
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", cursor_test_script],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.info(f"🔧 DEBUG: Running apps: '{result.stdout}'")
+            if "Cursor" in result.stdout:
+                logger.info("🔧 DEBUG: ✅ Cursor process found in running apps")
+            else:
+                logger.warning("🔧 DEBUG: ⚠️ Cursor process NOT found in running apps")
+        except Exception as e:
+            logger.error(f"🔧 DEBUG: App list test failed: {e}")
+        
+        # Test 3: Try to get Cursor windows
+        logger.info("🔧 DEBUG: Testing Cursor window detection...")
+        instances = self.get_cursor_instances_macos()
+        logger.info(f"🔧 DEBUG: Final result: {len(instances)} instances found")
+        for instance in instances:
+            logger.info(f"🔧 DEBUG: Instance: {instance}")
+    
+    def refresh_cursor_instances(self):
+        """Refresh the list of Cursor instances"""
+        logger.info("🔄 Refreshing Cursor instances...")
+        
+        if IS_MACOS:
+            self.cursor_instances = self.get_cursor_instances_macos()
+            logger.info(f"🔄 Refresh complete: {len(self.cursor_instances)} instances found")
+            
+            # Log each instance
+            for i, instance in enumerate(self.cursor_instances):
+                logger.info(f"🔄 Instance {i+1}: {instance}")
+        else:
+            logger.warning("⚠️ Instance management only available on macOS currently")
 
 
 def main():
