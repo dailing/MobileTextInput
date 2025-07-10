@@ -304,6 +304,247 @@ class TextInputApp:
             logger.error(f"❌ Failed to simulate Enter key: {e}")
             return False
     
+    def simulate_accept(self):
+        """Simulate Accept key combination (Cmd+Enter on macOS, Ctrl+Enter on Windows/Linux)"""
+        if not KEYBOARD_AVAILABLE:
+            logger.error("❌ Keyboard simulation not available - cannot simulate Accept")
+            return False
+        
+        try:
+            if IS_MACOS:
+                # macOS: Use Cmd+Enter
+                logger.info("🍎 Simulating Cmd+Enter (Accept) on macOS")
+                if PYNPUT_AVAILABLE:
+                    with keyboard_controller.pressed(Key.cmd):
+                        keyboard_controller.press(Key.enter)
+                        keyboard_controller.release(Key.enter)
+                    logger.info("✅ Cmd+Enter (Accept) operation completed successfully")
+                    return True
+                else:
+                    logger.error("❌ pynput not available for macOS Accept simulation")
+                    return False
+            
+            elif CURRENT_OS == "Windows":
+                # Windows: Try native method first
+                logger.info("🪟 Simulating Ctrl+Enter (Accept) on Windows")
+                if WINDOWS_FALLBACK:
+                    logger.info("🔧 Using Windows native Accept simulation")
+                    # Windows VK codes: Ctrl = 0x11, Enter = 0x0D
+                    user32.keybd_event(0x11, 0, 0, 0)  # Ctrl down
+                    user32.keybd_event(0x0D, 0, 0, 0)  # Enter down
+                    user32.keybd_event(0x0D, 0, 2, 0)  # Enter up
+                    user32.keybd_event(0x11, 0, 2, 0)  # Ctrl up
+                    logger.info("✅ Windows native Ctrl+Enter (Accept) operation completed successfully")
+                    return True
+                
+                # Fallback to pynput
+                elif PYNPUT_AVAILABLE:
+                    logger.info("🔧 Using pynput for Windows Accept simulation")
+                    with keyboard_controller.pressed(Key.ctrl):
+                        keyboard_controller.press(Key.enter)
+                        keyboard_controller.release(Key.enter)
+                    logger.info("✅ pynput Ctrl+Enter (Accept) operation completed successfully")
+                    return True
+            
+            else:
+                # Linux and other systems: Use Ctrl+Enter
+                logger.info(f"🐧 Simulating Ctrl+Enter (Accept) on {CURRENT_OS}")
+                if PYNPUT_AVAILABLE:
+                    with keyboard_controller.pressed(Key.ctrl):
+                        keyboard_controller.press(Key.enter)
+                        keyboard_controller.release(Key.enter)
+                    logger.info("✅ Ctrl+Enter (Accept) operation completed successfully")
+                    return True
+                else:
+                    logger.error("❌ pynput not available for Accept simulation")
+                    return False
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to simulate Accept: {e}")
+            return False
+    
+    def simulate_reject(self):
+        """Simulate Reject key combination (Cmd+Backspace on macOS, Ctrl+Backspace on Windows/Linux)"""
+        if not KEYBOARD_AVAILABLE:
+            logger.error("❌ Keyboard simulation not available - cannot simulate Reject")
+            return False
+        
+        try:
+            if IS_MACOS:
+                # macOS: Use Cmd+Backspace
+                logger.info("🍎 Simulating Cmd+Backspace (Reject) on macOS")
+                if PYNPUT_AVAILABLE:
+                    with keyboard_controller.pressed(Key.cmd):
+                        keyboard_controller.press(Key.backspace)
+                        keyboard_controller.release(Key.backspace)
+                    logger.info("✅ Cmd+Backspace (Reject) operation completed successfully")
+                    return True
+                else:
+                    logger.error("❌ pynput not available for macOS Reject simulation")
+                    return False
+            
+            elif CURRENT_OS == "Windows":
+                # Windows: Try native method first
+                logger.info("🪟 Simulating Ctrl+Backspace (Reject) on Windows")
+                if WINDOWS_FALLBACK:
+                    logger.info("🔧 Using Windows native Reject simulation")
+                    # Windows VK codes: Ctrl = 0x11, Backspace = 0x08
+                    user32.keybd_event(0x11, 0, 0, 0)  # Ctrl down
+                    user32.keybd_event(0x08, 0, 0, 0)  # Backspace down
+                    user32.keybd_event(0x08, 0, 2, 0)  # Backspace up
+                    user32.keybd_event(0x11, 0, 2, 0)  # Ctrl up
+                    logger.info("✅ Windows native Ctrl+Backspace (Reject) operation completed successfully")
+                    return True
+                
+                # Fallback to pynput
+                elif PYNPUT_AVAILABLE:
+                    logger.info("🔧 Using pynput for Windows Reject simulation")
+                    with keyboard_controller.pressed(Key.ctrl):
+                        keyboard_controller.press(Key.backspace)
+                        keyboard_controller.release(Key.backspace)
+                    logger.info("✅ pynput Ctrl+Backspace (Reject) operation completed successfully")
+                    return True
+            
+            else:
+                # Linux and other systems: Use Ctrl+Backspace
+                logger.info(f"🐧 Simulating Ctrl+Backspace (Reject) on {CURRENT_OS}")
+                if PYNPUT_AVAILABLE:
+                    with keyboard_controller.pressed(Key.ctrl):
+                        keyboard_controller.press(Key.backspace)
+                        keyboard_controller.release(Key.backspace)
+                    logger.info("✅ Ctrl+Backspace (Reject) operation completed successfully")
+                    return True
+                else:
+                    logger.error("❌ pynput not available for Reject simulation")
+                    return False
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to simulate Reject: {e}")
+            return False
+    
+    def simulate_new(self):
+        """Simulate New key combination (Cmd+N on macOS, Ctrl+N on Windows/Linux)"""
+        if not KEYBOARD_AVAILABLE:
+            logger.error("❌ Keyboard simulation not available - cannot simulate New")
+            return False
+        
+        try:
+            if IS_MACOS:
+                # macOS: Use Cmd+N
+                logger.info("🍎 Simulating Cmd+N (New) on macOS")
+                if PYNPUT_AVAILABLE:
+                    with keyboard_controller.pressed(Key.cmd):
+                        keyboard_controller.press('n')
+                        keyboard_controller.release('n')
+                    logger.info("✅ Cmd+N (New) operation completed successfully")
+                    return True
+                else:
+                    logger.error("❌ pynput not available for macOS New simulation")
+                    return False
+            
+            elif CURRENT_OS == "Windows":
+                # Windows: Try native method first
+                logger.info("🪟 Simulating Ctrl+N (New) on Windows")
+                if WINDOWS_FALLBACK:
+                    logger.info("🔧 Using Windows native New simulation")
+                    # Windows VK codes: Ctrl = 0x11, N = 0x4E
+                    user32.keybd_event(0x11, 0, 0, 0)  # Ctrl down
+                    user32.keybd_event(0x4E, 0, 0, 0)  # N down
+                    user32.keybd_event(0x4E, 0, 2, 0)  # N up
+                    user32.keybd_event(0x11, 0, 2, 0)  # Ctrl up
+                    logger.info("✅ Windows native Ctrl+N (New) operation completed successfully")
+                    return True
+                
+                # Fallback to pynput
+                elif PYNPUT_AVAILABLE:
+                    logger.info("🔧 Using pynput for Windows New simulation")
+                    with keyboard_controller.pressed(Key.ctrl):
+                        keyboard_controller.press('n')
+                        keyboard_controller.release('n')
+                    logger.info("✅ pynput Ctrl+N (New) operation completed successfully")
+                    return True
+            
+            else:
+                # Linux and other systems: Use Ctrl+N
+                logger.info(f"🐧 Simulating Ctrl+N (New) on {CURRENT_OS}")
+                if PYNPUT_AVAILABLE:
+                    with keyboard_controller.pressed(Key.ctrl):
+                        keyboard_controller.press('n')
+                        keyboard_controller.release('n')
+                    logger.info("✅ Ctrl+N (New) operation completed successfully")
+                    return True
+                else:
+                    logger.error("❌ pynput not available for New simulation")
+                    return False
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to simulate New: {e}")
+            return False
+    
+    def simulate_stop(self):
+        """Simulate Stop key combination (Cmd+Shift+Backspace on macOS, Ctrl+Shift+Backspace on Windows/Linux)"""
+        if not KEYBOARD_AVAILABLE:
+            logger.error("❌ Keyboard simulation not available - cannot simulate Stop")
+            return False
+        
+        try:
+            if IS_MACOS:
+                # macOS: Use Cmd+Shift+Backspace
+                logger.info("🍎 Simulating Cmd+Shift+Backspace (Stop) on macOS")
+                if PYNPUT_AVAILABLE:
+                    with keyboard_controller.pressed(Key.cmd):
+                        with keyboard_controller.pressed(Key.shift):
+                            keyboard_controller.press(Key.backspace)
+                            keyboard_controller.release(Key.backspace)
+                    logger.info("✅ Cmd+Shift+Backspace (Stop) operation completed successfully")
+                    return True
+                else:
+                    logger.error("❌ pynput not available for macOS Stop simulation")
+                    return False
+            
+            elif CURRENT_OS == "Windows":
+                # Windows: Try native method first
+                logger.info("🪟 Simulating Ctrl+Shift+Backspace (Stop) on Windows")
+                if WINDOWS_FALLBACK:
+                    logger.info("🔧 Using Windows native Stop simulation")
+                    # Windows VK codes: Ctrl = 0x11, Shift = 0x10, Backspace = 0x08
+                    user32.keybd_event(0x11, 0, 0, 0)  # Ctrl down
+                    user32.keybd_event(0x10, 0, 0, 0)  # Shift down
+                    user32.keybd_event(0x08, 0, 0, 0)  # Backspace down
+                    user32.keybd_event(0x08, 0, 2, 0)  # Backspace up
+                    user32.keybd_event(0x10, 0, 2, 0)  # Shift up
+                    user32.keybd_event(0x11, 0, 2, 0)  # Ctrl up
+                    logger.info("✅ Windows native Ctrl+Shift+Backspace (Stop) operation completed successfully")
+                    return True
+                
+                # Fallback to pynput
+                elif PYNPUT_AVAILABLE:
+                    logger.info("🔧 Using pynput for Windows Stop simulation")
+                    with keyboard_controller.pressed(Key.ctrl):
+                        with keyboard_controller.pressed(Key.shift):
+                            keyboard_controller.press(Key.backspace)
+                            keyboard_controller.release(Key.backspace)
+                    logger.info("✅ pynput Ctrl+Shift+Backspace (Stop) operation completed successfully")
+                    return True
+            
+            else:
+                # Linux and other systems: Use Ctrl+Shift+Backspace
+                logger.info(f"🐧 Simulating Ctrl+Shift+Backspace (Stop) on {CURRENT_OS}")
+                if PYNPUT_AVAILABLE:
+                    with keyboard_controller.pressed(Key.ctrl):
+                        with keyboard_controller.pressed(Key.shift):
+                            keyboard_controller.press(Key.backspace)
+                            keyboard_controller.release(Key.backspace)
+                    logger.info("✅ Ctrl+Shift+Backspace (Stop) operation completed successfully")
+                    return True
+                else:
+                    logger.error("❌ pynput not available for Stop simulation")
+                    return False
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to simulate Stop: {e}")
+            return False
+    
     def auto_paste_text(self, text):
         """Auto-paste text by copying to clipboard then simulating paste"""
         if text.strip():
@@ -430,11 +671,12 @@ class TextInputApp:
                     outline: none !important;
                 }
                 .action-button {
-                    width: 100% !important;
+                    flex: 1 !important;
                     padding: 15px !important;
                     font-size: 16px !important;
-                    margin: 10px 0 !important;
+                    margin: 5px !important;
                     border-radius: 8px !important;
+                    min-width: 0 !important;
                 }
                 .copy-button {
                     background-color: #4CAF50 !important;
@@ -478,6 +720,46 @@ class TextInputApp:
                     border-radius: 5px !important;
                     margin: 10px 0 !important;
                 }
+                
+                /* Responsive button layout */
+                @media (max-width: 480px) {
+                    .action-button {
+                        font-size: 14px !important;
+                        padding: 12px 8px !important;
+                        margin: 3px !important;
+                    }
+                }
+                
+                /* Ensure buttons wrap on very small screens */
+                @media (max-width: 360px) {
+                    .action-button {
+                        flex-basis: 48% !important;
+                        margin: 2px !important;
+                    }
+                }
+                
+                /* UI Grouping styles */
+                .settings-section {
+                    background-color: #f8f9fa !important;
+                    border-radius: 8px !important;
+                    padding: 15px !important;
+                    margin: 10px 0 !important;
+                    border-left: 4px solid #4CAF50 !important;
+                }
+                
+                .status-section {
+                    background-color: #f0f8ff !important;
+                    border-radius: 8px !important;
+                    padding: 15px !important;
+                    margin: 10px 0 !important;
+                    border-left: 4px solid #2196F3 !important;
+                }
+                
+                .section-title {
+                    margin-bottom: 12px !important;
+                    font-weight: 600 !important;
+                    color: #333 !important;
+                }
             </style>
         ''')
         
@@ -496,42 +778,98 @@ class TextInputApp:
             # Character count
             self.char_count = ui.label("0 characters").classes('text-caption')
             
-            # Action buttons
+            # Action buttons (including voice if available)
             with ui.row().classes('w-full'):
                 self.copy_button = ui.button(
-                    "Copy to Clipboard", 
+                    "Copy", 
                     on_click=self.copy_current_text
                 ).classes('action-button copy-button')
                 
                 self.enter_button = ui.button(
-                    "Press Enter", 
+                    "Enter", 
                     on_click=self.press_enter_key
                 ).classes('action-button copy-button')
                 
-                self.clear_button = ui.button(
-                    "Clear Text", 
-                    on_click=self.clear_text
-                ).classes('action-button clear-button')
-            
-            # Voice input section
-            if self.voice_enabled:
-                ui.separator()
-                ui.label("Voice to Text:").classes('text-h6')
-                
-                with ui.row().classes('w-full'):
-                    # Push-to-talk button
+                # Add voice button if available
+                if self.voice_enabled:
                     self.voice_button = ui.button(
-                        "🎤 Hold to Record", 
+                        "Record", 
                         on_click=None
                     ).classes('action-button voice-button')
                 
-                # Voice status and info
-                voice_info = self.voice_processor.get_model_info()
-                ui.label(f"✅ Whisper {voice_info['model']} model loaded ({voice_info['size']})").classes('text-caption text-green')
-                ui.label("🎤 Press and hold button to record • Release to transcribe").classes('text-caption')
-                ui.label("🌍 Auto-detects language • Works on mobile devices").classes('text-caption')
+                self.clear_button = ui.button(
+                    "Clear", 
+                    on_click=self.clear_text
+                ).classes('action-button clear-button')
+            
+            # Extended keyboard shortcuts row
+            with ui.row().classes('w-full'):
+                cmd_key = "Cmd" if IS_MACOS else "Ctrl"
                 
-                # Add JavaScript for push-to-talk functionality
+                self.accept_button = ui.button(
+                    f"Accept ({cmd_key}+↵)", 
+                    on_click=self.press_accept_key
+                ).classes('action-button copy-button')
+                
+                self.reject_button = ui.button(
+                    f"Reject ({cmd_key}+⌫)", 
+                    on_click=self.press_reject_key
+                ).classes('action-button clear-button')
+                
+                self.new_button = ui.button(
+                    f"New ({cmd_key}+N)", 
+                    on_click=self.press_new_key
+                ).classes('action-button copy-button')
+                
+                self.stop_button = ui.button(
+                    f"Stop ({cmd_key}+⇧+⌫)", 
+                    on_click=self.press_stop_key
+                ).classes('action-button clear-button')
+            
+            # Settings section - group toggles together
+            with ui.column().classes('w-full settings-section'):
+                ui.label("Settings").classes('section-title')
+                with ui.column().style('gap: 8px;'):
+                    paste_key = "Cmd+V" if IS_MACOS else "Ctrl+V"
+                    self.auto_paste_toggle = ui.checkbox(
+                        f"Auto-paste when copying to clipboard ({paste_key})", 
+                        value=True
+                    )
+                    
+                    self.press_enter_toggle = ui.checkbox(
+                        "Press Enter after pasting", 
+                        value=True
+                    )
+            
+            # Status section - group all status info together  
+            with ui.column().classes('w-full status-section'):
+                ui.label("System Status").classes('section-title')
+                with ui.column().style('gap: 4px;'):
+                    # Voice status
+                    if self.voice_enabled:
+                        voice_info = self.voice_processor.get_model_info()
+                        ui.label(f"🎤 Voice: Whisper {voice_info['model']} ready • Hold Record button").classes('text-caption text-green')
+                    else:
+                        ui.label("❌ Voice-to-text not available").classes('text-caption text-red')
+                        if not WHISPER_AVAILABLE:
+                            ui.label("📦 Install: pip install openai-whisper").classes('text-caption text-red')
+                    
+                    # Keyboard simulation status
+                    if WINDOWS_FALLBACK:
+                        ui.label("✅ Windows native keyboard simulation").classes('text-caption text-green')
+                    elif PYNPUT_AVAILABLE:
+                        ui.label("✅ pynput keyboard simulation").classes('text-caption text-green')
+                    else:
+                        ui.label("⚠️ Keyboard simulation not available").classes('text-caption text-orange')
+                        if not KEYBOARD_AVAILABLE:
+                            ui.label("📦 Install pynput: pip install pynput").classes('text-caption text-red')
+                    
+                    # Storage synchronization status
+                    ui.label("✅ Cross-device synchronization enabled").classes('text-caption text-blue')
+                    ui.label("📱 Text syncs across all devices and browser tabs").classes('text-caption text-blue')
+            
+            # Add JavaScript for voice functionality if enabled
+            if self.voice_enabled:
                 ui.add_head_html('''
                     <script>
                     let mediaRecorder;
@@ -665,7 +1003,7 @@ class TextInputApp:
                             // Update button text
                             const button = document.querySelector('.voice-button');
                             if (button) {
-                                button.textContent = '🔴 Recording... (Release to stop)';
+                                button.textContent = '🔴';
                                 button.style.backgroundColor = '#f44336';
                             }
                             
@@ -682,7 +1020,7 @@ class TextInputApp:
                             // Update button text
                             const button = document.querySelector('.voice-button');
                             if (button) {
-                                button.textContent = '🎤 Hold to Record';
+                                button.textContent = 'Record';
                                 button.style.backgroundColor = '#2196F3';
                             }
                         }
@@ -716,48 +1054,6 @@ class TextInputApp:
                     });
                     </script>
                 ''')
-            else:
-                # Show voice unavailable message
-                ui.separator()
-                ui.label("Voice to Text:").classes('text-h6')
-                ui.label("❌ Voice-to-text not available").classes('text-caption text-red')
-                if not WHISPER_AVAILABLE:
-                    ui.label("📦 Install: pip install openai-whisper").classes('text-caption text-red')
-            
-            # Auto-paste toggle
-            with ui.row().classes('w-full justify-center'):
-                paste_key = "Cmd+V" if IS_MACOS else "Ctrl+V"
-                self.auto_paste_toggle = ui.checkbox(
-                    f"Auto-paste when copying to clipboard ({paste_key})", 
-                    value=False
-                ).classes('text-center')
-            
-            # Press Enter toggle
-            with ui.row().classes('w-full justify-center'):
-                self.press_enter_toggle = ui.checkbox(
-                    "Press Enter after pasting", 
-                    value=False
-                ).classes('text-center')
-            
-            # Keyboard simulation status
-            keyboard_status = []
-            if WINDOWS_FALLBACK:
-                keyboard_status.append("✅ Windows native keyboard simulation")
-            elif PYNPUT_AVAILABLE:
-                keyboard_status.append("✅ pynput keyboard simulation") 
-            else:
-                keyboard_status.append("⚠️ Keyboard simulation not available")
-            
-            if not KEYBOARD_AVAILABLE:
-                keyboard_status.append("📦 Install pynput: pip install pynput")
-            
-            for status in keyboard_status:
-                ui.label(status).classes('text-caption')
-            
-            # Storage synchronization status
-            ui.separator()
-            ui.label("✅ Cross-device synchronization enabled").classes('text-caption text-blue')
-            ui.label("Text syncs across all devices and browser tabs").classes('text-caption text-blue')
             
             # History section
             ui.separator()
@@ -848,6 +1144,54 @@ class TextInputApp:
         else:
             logger.error("❌ Enter key simulation failed")
             self.show_status("Failed to press Enter key", "error")
+    
+    def press_accept_key(self):
+        """Press Accept key combination on the server"""
+        cmd_key = "Cmd" if IS_MACOS else "Ctrl"
+        logger.info(f"✅ Accept ({cmd_key}+Enter) button pressed")
+        
+        if self.simulate_accept():
+            logger.info(f"✅ Accept ({cmd_key}+Enter) simulation completed successfully")
+            self.show_status(f"Accept ({cmd_key}+Enter) pressed!", "success")
+        else:
+            logger.error(f"❌ Accept ({cmd_key}+Enter) simulation failed")
+            self.show_status(f"Failed to press Accept ({cmd_key}+Enter)", "error")
+    
+    def press_reject_key(self):
+        """Press Reject key combination on the server"""
+        cmd_key = "Cmd" if IS_MACOS else "Ctrl"
+        logger.info(f"🚫 Reject ({cmd_key}+Backspace) button pressed")
+        
+        if self.simulate_reject():
+            logger.info(f"✅ Reject ({cmd_key}+Backspace) simulation completed successfully")
+            self.show_status(f"Reject ({cmd_key}+Backspace) pressed!", "success")
+        else:
+            logger.error(f"❌ Reject ({cmd_key}+Backspace) simulation failed")
+            self.show_status(f"Failed to press Reject ({cmd_key}+Backspace)", "error")
+    
+    def press_new_key(self):
+        """Press New key combination on the server"""
+        cmd_key = "Cmd" if IS_MACOS else "Ctrl"
+        logger.info(f"📄 New ({cmd_key}+N) button pressed")
+        
+        if self.simulate_new():
+            logger.info(f"✅ New ({cmd_key}+N) simulation completed successfully")
+            self.show_status(f"New ({cmd_key}+N) pressed!", "success")
+        else:
+            logger.error(f"❌ New ({cmd_key}+N) simulation failed")
+            self.show_status(f"Failed to press New ({cmd_key}+N)", "error")
+    
+    def press_stop_key(self):
+        """Press Stop key combination on the server"""
+        cmd_key = "Cmd" if IS_MACOS else "Ctrl"
+        logger.info(f"🛑 Stop ({cmd_key}+Shift+Backspace) button pressed")
+        
+        if self.simulate_stop():
+            logger.info(f"✅ Stop ({cmd_key}+Shift+Backspace) simulation completed successfully")
+            self.show_status(f"Stop ({cmd_key}+Shift+Backspace) pressed!", "success")
+        else:
+            logger.error(f"❌ Stop ({cmd_key}+Shift+Backspace) simulation failed")
+            self.show_status(f"Failed to press Stop ({cmd_key}+Shift+Backspace)", "error")
     
     def copy_to_clipboard_silent(self, text):
         """Copy text to clipboard without showing status"""
