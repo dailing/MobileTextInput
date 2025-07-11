@@ -263,36 +263,12 @@ def run_application():
         return False
 
     # Check voice functionality status
-    voice_available, missing_voice = check_voice_requirements()
-    ffmpeg_available = check_ffmpeg()
-    gpu_available, gpu_info = check_gpu_support()
-
     print("Starting application...")
     print("=" * 60)
     print("Mobile Text Input Web Application")
     print("Access from your mobile device using your computer's IP address")
     print("")
 
-    # Show feature status
-    print("📱 Core Features: ✅ Available")
-    if voice_available and ffmpeg_available:
-        print("🎤 Voice-to-Text: ✅ Available")
-        if gpu_available:
-            print("🚀 GPU Acceleration: ✅ Available")
-            print(f"   {gpu_info}")
-        else:
-            print("💻 GPU Acceleration: ❌ CPU Only")
-    elif voice_available and not ffmpeg_available:
-        print("🎤 Voice-to-Text: ⚠️ Partially Available (FFmpeg missing)")
-        print("   Install FFmpeg for full voice functionality")
-    elif not voice_available and ffmpeg_available:
-        print("🎤 Voice-to-Text: ⚠️ Partially Available (Python packages missing)")
-        print(f"   Missing: {', '.join(missing_voice)}")
-    else:
-        print("🎤 Voice-to-Text: ❌ Not Available")
-        print("   Install voice packages and FFmpeg for voice functionality")
-
-    print("")
     print("Press Ctrl+C to stop the server")
     print("=" * 60)
 
