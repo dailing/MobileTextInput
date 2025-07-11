@@ -16,9 +16,9 @@ import os
 import asyncio
 from pathlib import Path
 from fastapi import Request
-import subprocess
 import json
 from typing import Dict, List, Optional, Any
+from instance_manager import create_application_instance_manager
 
 # Configure logging
 logging.basicConfig(
@@ -77,7 +77,6 @@ logger.info(f"🖥️ Detected operating system: {CURRENT_OS}")
 if CURRENT_OS == "Windows":
     try:
         import ctypes
-        from ctypes import wintypes
 
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
@@ -662,8 +661,8 @@ class TextInputApp:
         self.voice_processor = VoiceProcessor() if WHISPER_AVAILABLE else None
         self.voice_enabled = WHISPER_AVAILABLE
 
-        # Initialize instance management
-        self.cursor_instances = []
+        # Initialize application instance manager (for Cursor)
+        self.instance_manager = create_application_instance_manager("Cursor")
 
         # Initialize button factory for configuration-driven UI
         self.button_factory = ButtonFactory(self)
@@ -790,17 +789,24 @@ class TextInputApp:
         )
 
         # Instance Management Tabs (macOS and Windows)
-        if IS_MACOS or IS_WINDOWS:
-            # Auto-refresh instances on page load
-            self.refresh_cursor_instances()
+        if self.instance_manager.is_available():
+            # Get application instances
+            app_instances = self.instance_manager.list_instances()
+            logger.info(f"🔍 DEBUG: Found {len(app_instances)} application instances")
+            for i, instance in enumerate(app_instances):
+                logger.info(f"🔍 DEBUG: Instance {i}: {instance}")
 
             # Create tabs for instances if any exist
-            if self.cursor_instances:
+            if app_instances:
+                logger.info(
+                    f"🔍 DEBUG: Creating tabs for {len(app_instances)} instances"
+                )
                 with ui.tabs().classes("w-full") as tabs:
                     self.instance_tabs = {}
-                    for instance in self.cursor_instances:
-                        workspace = instance.get(
-                            "Workspace", f"Window {instance.get('ID')}"
+                    for instance in app_instances:
+                        workspace = instance.get("workspace", "Unknown")
+                        logger.info(
+                            f"🔍 DEBUG: Creating tab for workspace: {workspace}"
                         )
                         tab = ui.tab(workspace)
                         self.instance_tabs[workspace] = {
@@ -808,86 +814,61 @@ class TextInputApp:
                             "instance": instance,
                         }
 
-                # Tab panels (empty since tabs show the selection)
-                with ui.tab_panels(tabs, value=None).classes("w-full") as panels:
-                    for workspace in self.instance_tabs:
-                        with ui.tab_panel(self.instance_tabs[workspace]["tab"]):
-                            pass  # Empty panel - tabs show the selection
+                logger.info(
+                    f"🔍 DEBUG: Instance tabs created: {list(self.instance_tabs.keys())}"
+                )
 
                 # Handle tab selection with proper event binding
                 def on_tab_change(e):
-                    # Get the selected workspace from event args
-                    selected_workspace = (
-                        e.args if hasattr(e, "args") and e.args else None
-                    )
+                    logger.info(f"🔍 DEBUG: Tab change event triggered")
+                    logger.info(f"🔍 DEBUG: Event object: {e}")
+                    logger.info(f"🔍 DEBUG: Event type: {type(e)}")
+                    logger.info(f"🔍 DEBUG: Event dir: {dir(e)}")
+
+                    # Try multiple ways to get the selected value
+                    selected_workspace = None
+                    if hasattr(e, "args"):
+                        selected_workspace = e.args
+                        logger.info(f"🔍 DEBUG: Found args: {selected_workspace}")
+                    if hasattr(e, "value"):
+                        selected_workspace = e.value
+                        logger.info(f"🔍 DEBUG: Found value: {selected_workspace}")
+                    if hasattr(e, "sender"):
+                        logger.info(f"🔍 DEBUG: Event sender: {e.sender}")
+                        if hasattr(e.sender, "value"):
+                            selected_workspace = e.sender.value
+                            logger.info(
+                                f"🔍 DEBUG: Found sender value: {selected_workspace}"
+                            )
 
                     logger.info(f"🎯 Tab clicked: {selected_workspace}")
+                    logger.info(
+                        f"🔍 DEBUG: Available tabs: {list(self.instance_tabs.keys())}"
+                    )
 
                     if selected_workspace and selected_workspace in self.instance_tabs:
                         instance = self.instance_tabs[selected_workspace]["instance"]
-                        logger.info(f"🎯 Activating instance: {instance}")
+                        instance_id = instance.get("id")
+                        logger.info(f"🎯 Activating instance: {instance_id}")
 
-                        # Choose activation method based on OS
-                        if IS_MACOS:
-                            success = self.activate_cursor_instance_macos(instance)
-                        elif IS_WINDOWS:
-                            success = self.activate_cursor_instance_windows(instance)
-                        else:
-                            success = False
+                        # Use the application instance manager to focus the instance
+                        self.instance_manager.focus_instance(instance_id)
 
-                        if success:
-                            logger.info(
-                                f"✅ Successfully activated workspace: {selected_workspace}"
-                            )
-                        else:
-                            logger.error(
-                                f"❌ Failed to activate workspace: {selected_workspace}"
-                            )
-                            self.show_status(
-                                f"Failed to activate {selected_workspace}", "error"
-                            )
                     else:
                         logger.warning(f"⚠️ Workspace not found: {selected_workspace}")
 
                 # Try multiple event binding approaches
                 tabs.on("update:model-value", on_tab_change)
 
-                # Alternative: bind to panels value change (for redundancy)
-                def on_panel_change(e):
-                    # Get the selected workspace from event args
-                    selected_workspace = (
-                        e.args if hasattr(e, "args") and e.args else None
-                    )
+                # Also try click events
+                tabs.on(
+                    "click", lambda e: logger.info(f"🔍 DEBUG: Tab click event: {e}")
+                )
 
-                    logger.info(f"🎯 Panel changed to: {selected_workspace}")
-
-                    if selected_workspace and selected_workspace in self.instance_tabs:
-                        instance = self.instance_tabs[selected_workspace]["instance"]
-                        logger.info(f"🎯 Activating instance: {instance}")
-
-                        # Choose activation method based on OS
-                        if IS_MACOS:
-                            success = self.activate_cursor_instance_macos(instance)
-                        elif IS_WINDOWS:
-                            success = self.activate_cursor_instance_windows(instance)
-                        else:
-                            success = False
-
-                        if success:
-                            logger.info(
-                                f"✅ Successfully activated workspace: {selected_workspace}"
-                            )
-                        else:
-                            logger.error(
-                                f"❌ Failed to activate workspace: {selected_workspace}"
-                            )
-                            self.show_status(
-                                f"Failed to activate {selected_workspace}", "error"
-                            )
-                    else:
-                        logger.warning(f"⚠️ Workspace not found: {selected_workspace}")
-
-                panels.on("update:model-value", on_panel_change)
+            else:
+                logger.info("No application instances found - tabs not created")
+        else:
+            logger.info("Instance manager not available - tabs not created")
 
         # Main content container
         with ui.column().classes("w-full max-w-2xl mx-auto"):
@@ -965,7 +946,7 @@ class TextInputApp:
                         notification.textContent = message;
                         notification.style.cssText = `
                             position: fixed;
-                            top: 20px;
+                            bottom: 20px;
                             right: 20px;
                             background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : '#2196F3'};
                             color: white;
@@ -1286,421 +1267,6 @@ class TextInputApp:
             # Trigger JavaScript stop
             ui.run_javascript(
                 "if (typeof stopRecording === 'function') stopRecording();"
-            )
-
-    def get_cursor_instances_windows(self):
-        """Get all Cursor instances on Windows using Windows API"""
-        if not WINDOWS_FALLBACK:
-            logger.error("❌ Windows API not available")
-            return []
-
-        try:
-            logger.info("🔍 Searching for Cursor windows on Windows...")
-
-            # Callback function to enumerate windows
-            def enum_windows_callback(hwnd, windows):
-                if user32.IsWindowVisible(hwnd):
-                    # Get window title
-                    title_length = user32.GetWindowTextLengthW(hwnd)
-                    if title_length > 0:
-                        title_buffer = ctypes.create_unicode_buffer(title_length + 1)
-                        user32.GetWindowTextW(hwnd, title_buffer, title_length + 1)
-                        title = title_buffer.value
-
-                        # Get process ID
-                        process_id = wintypes.DWORD()
-                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
-
-                        # Get process name
-                        try:
-                            process_handle = kernel32.OpenProcess(
-                                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-                                False,
-                                process_id.value,
-                            )
-                            if process_handle:
-                                process_name_buffer = ctypes.create_unicode_buffer(260)
-                                if kernel32.QueryFullProcessImageNameW(
-                                    process_handle,
-                                    0,
-                                    process_name_buffer,
-                                    ctypes.byref(wintypes.DWORD(260)),
-                                ):
-                                    process_path = process_name_buffer.value
-                                    process_name = os.path.basename(process_path)
-
-                                    # Check if it's a Cursor process
-                                    if process_name.lower() in ["cursor.exe", "cursor"]:
-                                        windows.append(
-                                            {
-                                                "hwnd": hwnd,
-                                                "title": title,
-                                                "process_id": process_id.value,
-                                                "process_name": process_name,
-                                            }
-                                        )
-
-                                kernel32.CloseHandle(process_handle)
-                        except Exception as e:
-                            logger.debug(f"Error getting process info for window: {e}")
-
-                return True
-
-            # Define the callback function type
-            WNDENUMPROC = ctypes.WINFUNCTYPE(
-                ctypes.c_bool, wintypes.HWND, ctypes.POINTER(ctypes.py_object)
-            )
-
-            # Enumerate all windows
-            windows = []
-            enum_callback = WNDENUMPROC(enum_windows_callback)
-            user32.EnumWindows(enum_callback, ctypes.py_object(windows))
-
-            # Process the found windows
-            instances = []
-            for i, window in enumerate(windows):
-                title = window["title"]
-
-                # Extract workspace name from window title
-                # Format: "filename — workspace" or "filename - workspace"
-                workspace_name = "Unknown"
-                if " — " in title:  # Using em dash
-                    parts = title.split(" — ")
-                    if len(parts) >= 2:
-                        workspace_name = parts[1].strip()
-                elif " - " in title:  # Fallback for regular dash
-                    parts = title.split(" - ")
-                    if len(parts) >= 2:
-                        workspace_name = parts[1].strip()
-
-                instance_info = {
-                    "ID": str(i + 1),
-                    "Title": title,
-                    "Workspace": workspace_name,
-                    "HWND": window["hwnd"],
-                    "ProcessID": window["process_id"],
-                }
-                instances.append(instance_info)
-
-            logger.info(f"🔍 Found {len(instances)} Cursor instances on Windows")
-            return instances
-
-        except Exception as e:
-            logger.error(f"❌ Error enumerating Windows: {e}")
-            return []
-
-    def get_cursor_instances_macos(self):
-        """Get all Cursor instances on macOS using AppleScript"""
-        # First, let's try to just count windows to see if we can access them
-        count_script = """
-        tell application "System Events"
-            set cursorProcesses to every application process whose name is "Cursor"
-            set totalWindows to 0
-            repeat with cursorProcess in cursorProcesses
-                set windowList to every window of cursorProcess
-                set totalWindows to totalWindows + (count of windowList)
-            end repeat
-            return totalWindows as string
-        end tell
-        """
-
-        try:
-            logger.info("🔍 First testing window count...")
-            result = subprocess.run(
-                ["osascript", "-e", count_script],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            logger.info(f"📋 Window count result: '{result.stdout}'")
-
-            if result.stdout.strip() == "0":
-                logger.warning("⚠️ No Cursor windows found")
-                return []
-
-        except Exception as e:
-            logger.error(f"❌ Window count test failed: {e}")
-            return []
-
-        # Now try to get window names with a different approach
-        # Let's try building the result differently
-        window_script = """
-        tell application "System Events"
-            set cursorProcesses to every application process whose name is "Cursor"
-            set windowNames to {}
-            
-            repeat with cursorProcess in cursorProcesses
-                set windowList to every window of cursorProcess
-                repeat with currentWindow in windowList
-                    try
-                        set windowName to name of currentWindow
-                        if windowName is not "" then
-                            set end of windowNames to windowName
-                        end if
-                    end try
-                end repeat
-            end repeat
-            
-            -- Convert list to string manually
-            set resultString to ""
-            repeat with i from 1 to count of windowNames
-                set resultString to resultString & item i of windowNames
-                if i < count of windowNames then
-                    set resultString to resultString & "|"
-                end if
-            end repeat
-            
-            return resultString
-        end tell
-        """
-
-        try:
-            logger.info("🔍 Running window names script...")
-            result = subprocess.run(
-                ["osascript", "-e", window_script],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
-            if result.stdout.strip():
-                window_names = result.stdout.strip().split("|")
-                logger.info(f"📋 Found window names: {window_names}")
-
-                instances = []
-                for i, window_name in enumerate(window_names):
-                    if window_name.strip():
-                        # Extract workspace name from window title
-                        # Format: "filename — workspace"
-                        workspace_name = "Unknown"
-                        if " — " in window_name:  # Using em dash
-                            parts = window_name.split(" — ")
-                            if len(parts) >= 2:
-                                workspace_name = parts[
-                                    1
-                                ].strip()  # Take the part after the em dash
-                        elif " - " in window_name:  # Fallback for regular dash
-                            parts = window_name.split(" - ")
-                            if len(parts) >= 2:
-                                workspace_name = parts[1].strip()
-
-                        instance_info = {
-                            "ID": str(i + 1),
-                            "Title": window_name.strip(),
-                            "Workspace": workspace_name,
-                        }
-                        instances.append(instance_info)
-
-                logger.info(f"🔍 Found {len(instances)} Cursor instances")
-                return instances
-            else:
-                logger.warning("⚠️ Window names script returned empty output")
-                return []
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"❌ Window names script failed: {e}")
-            logger.error(f"❌ Return code: {e.returncode}")
-            logger.error(f"❌ Stdout: {e.stdout}")
-            logger.error(f"❌ Stderr: {e.stderr}")
-            return []
-        except Exception as e:
-            logger.error(f"❌ Unexpected error: {e}")
-            return []
-
-    def activate_cursor_instance_windows(self, instance_info):
-        """Activate specific Cursor instance on Windows"""
-        if not WINDOWS_FALLBACK:
-            logger.error("❌ Windows API not available")
-            return False
-
-        hwnd = instance_info.get("HWND")
-        workspace = instance_info.get("Workspace", "Unknown")
-        title = instance_info.get("Title", "Unknown")
-
-        logger.info("🎯 Attempting to activate Cursor instance on Windows:")
-        logger.info(f"   - HWND: {hwnd}")
-        logger.info(f"   - Workspace: {workspace}")
-        logger.info(f"   - Title: {title}")
-
-        try:
-            # Check if window is minimized
-            if user32.IsIconic(hwnd):
-                logger.info("🔄 Window is minimized, restoring...")
-                user32.ShowWindow(hwnd, SW_RESTORE)
-
-            # Bring window to foreground
-            logger.info("🔄 Bringing window to foreground...")
-            user32.SetForegroundWindow(hwnd)
-
-            # Additional method to ensure window is activated
-            user32.BringWindowToTop(hwnd)
-
-            # Check if successful
-            foreground_hwnd = user32.GetForegroundWindow()
-            if foreground_hwnd == hwnd:
-                logger.info(f"✅ Successfully activated window: {title}")
-                return True
-            else:
-                logger.warning(f"⚠️ Window activation may not have been successful")
-                # Return True as some Windows versions may not update foreground immediately
-                return True
-
-        except Exception as e:
-            logger.error(f"❌ Failed to activate window: {e}")
-            return False
-
-    def activate_cursor_instance_macos(self, instance_info):
-        """Activate specific Cursor instance on macOS"""
-        window_id = instance_info.get("ID", "1")
-        workspace = instance_info.get("Workspace", "Unknown")
-        title = instance_info.get("Title", "Unknown")
-
-        logger.info("🎯 Attempting to activate Cursor instance:")
-        logger.info(f"   - Window ID: {window_id}")
-        logger.info(f"   - Workspace: {workspace}")
-        logger.info(f"   - Title: {title}")
-
-        # Try a more reliable approach: activate by window name instead of index
-        escaped_title = title.replace('"', '\\"')  # Escape quotes in window title
-
-        script = f"""
-        tell application "System Events"
-            tell application process "Cursor"
-                set frontmost to true
-                try
-                    -- Get window count first
-                    set windowCount to count of windows
-                    log "Total windows: " & windowCount
-                    
-                    -- Try to find and activate the window by name
-                    set targetWindow to first window whose name is "{escaped_title}"
-                    
-                    -- Bring the target window to front using different methods
-                    try
-                        -- Method 1: Set index to 1
-                        set index of targetWindow to 1
-                        log "Method 1 (set index) succeeded"
-                    on error
-                        try
-                            -- Method 2: Perform action (click)
-                            perform action "AXRaise" of targetWindow
-                            log "Method 2 (AXRaise) succeeded"
-                        on error
-                            -- Method 3: Simple click
-                            click targetWindow
-                            log "Method 3 (click) succeeded"
-                        end try
-                    end try
-                    
-                    -- Verify the window is now frontmost
-                    set frontWindow to window 1
-                    set frontWindowName to name of frontWindow
-                    log "Front window is now: " & frontWindowName
-                    
-                    return "success:" & frontWindowName
-                on error errMsg
-                    log "Error: " & errMsg
-                    return "error:" & errMsg
-                end try
-            end tell
-        end tell
-        """
-
-        try:
-            logger.info("🍎 Executing AppleScript for window activation...")
-            result = subprocess.run(
-                ["osascript", "-e", script], capture_output=True, text=True, check=True
-            )
-
-            output = result.stdout.strip()
-            logger.info(f"🍎 AppleScript output: '{output}'")
-
-            if "success:" in output:
-                activated_window = output.split("success:")[1]
-                logger.info(f"✅ Successfully activated window: '{activated_window}'")
-                logger.info(f"✅ Target was: '{title}'")
-                return True
-            elif "error:" in output:
-                error_msg = output.split("error:")[1]
-                logger.error(f"❌ AppleScript error: {error_msg}")
-
-                # Try simpler fallback approach - target Cursor app directly
-                logger.info("🔄 Trying simpler fallback approach...")
-                simple_script = f"""
-                tell application "Cursor"
-                    activate
-                    try
-                        -- Try to bring specific window to front
-                        set targetWindow to first window whose name contains "{workspace}"
-                        set index of targetWindow to 1
-                        return "fallback_success"
-                    on error
-                        -- Just activate the app
-                        return "app_activated"
-                    end try
-                end tell
-                """
-
-                try:
-                    fallback_result = subprocess.run(
-                        ["osascript", "-e", simple_script],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-
-                    fallback_output = fallback_result.stdout.strip()
-                    logger.info(f"🔄 Fallback result: '{fallback_output}'")
-
-                    if "success" in fallback_output or "activated" in fallback_output:
-                        logger.info(
-                            f"✅ Fallback activation succeeded for workspace: {workspace}"
-                        )
-                        return True
-
-                except Exception as fallback_error:
-                    logger.error(f"❌ Fallback approach also failed: {fallback_error}")
-
-                return False
-            else:
-                logger.error(f"❌ Unexpected AppleScript output: {output}")
-                return False
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"❌ Failed to execute AppleScript: {e}")
-            logger.error(f"❌ Return code: {e.returncode}")
-            logger.error(f"❌ Stdout: {e.stdout}")
-            logger.error(f"❌ Stderr: {e.stderr}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Unexpected error during window activation: {e}")
-            return False
-
-    def refresh_cursor_instances(self):
-        """Refresh the list of Cursor instances"""
-        logger.info("🔄 Refreshing Cursor instances...")
-
-        if IS_MACOS:
-            self.cursor_instances = self.get_cursor_instances_macos()
-            logger.info(
-                f"🔄 Refresh complete: {len(self.cursor_instances)} instances found"
-            )
-
-            # Log each instance
-            for i, instance in enumerate(self.cursor_instances):
-                logger.info(f"🔄 Instance {i+1}: {instance}")
-        elif IS_WINDOWS:
-            self.cursor_instances = self.get_cursor_instances_windows()
-            logger.info(
-                f"🔄 Refresh complete: {len(self.cursor_instances)} instances found"
-            )
-
-            # Log each instance
-            for i, instance in enumerate(self.cursor_instances):
-                logger.info(f"🔄 Instance {i+1}: {instance}")
-        else:
-            logger.warning(
-                "⚠️ Instance management only available on macOS and Windows currently"
             )
 
 
