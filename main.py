@@ -896,6 +896,7 @@ class TextInputApp:
                 ui.textarea(placeholder="Type your text here...")
                 .props("clearable")
                 .bind_value(app.storage.general, self.storage_key)
+                .classes("w-full")
             )
 
             # Voice input section (separate from other buttons)
@@ -1266,7 +1267,7 @@ class TextInputApp:
 
             # Update button appearance for recording state
             self.voice_button.set_text("🔴 Recording... (Click to Stop)")
-            self.voice_button.classes("flex-1 p-2 m-1 bg-negative")
+            self.voice_button.classes(replace="flex-1 p-2 m-1 bg-negative")
 
             # Trigger JavaScript recording
             ui.run_javascript(
@@ -1280,7 +1281,7 @@ class TextInputApp:
 
             # Reset button appearance to normal state
             self.voice_button.set_text("🎤 Start Recording")
-            self.voice_button.classes("flex-1 p-2 m-1 bg-primary")
+            self.voice_button.classes(replace="flex-1 p-2 m-1 bg-primary")
 
             # Trigger JavaScript stop
             ui.run_javascript(
