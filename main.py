@@ -18,6 +18,8 @@ import asyncio
 from pathlib import Path
 from fastapi import Request
 import subprocess
+import json
+from typing import Dict, List, Optional, Any
 
 # Configure logging
 logging.basicConfig(
@@ -127,6 +129,7 @@ class VoiceProcessor:
     def __init__(self):
         self.model = None
         self.model_loaded = False
+        self.model_loading = False
         self.device = "cuda" if CUDA_AVAILABLE else "cpu"
         self.supported_formats = {
             ".mp3",
@@ -139,13 +142,17 @@ class VoiceProcessor:
             ".ogg",
         }
 
-        if WHISPER_AVAILABLE:
-            self.load_model()
-        else:
+        if not WHISPER_AVAILABLE:
             logger.error("❌ Whisper not available - voice processing disabled")
+        else:
+            logger.info("✅ Whisper available - model will load on first use")
 
     def load_model(self):
         """Load the Whisper model with GPU support if available"""
+        if self.model_loading or self.model_loaded:
+            return
+
+        self.model_loading = True
         try:
             model_size = "medium"  # Balance between accuracy and speed
             logger.info(f"🔄 Loading Whisper {model_size} model on {self.device}...")
@@ -167,6 +174,8 @@ class VoiceProcessor:
         except Exception as e:
             logger.error(f"❌ Failed to load Whisper model: {e}")
             self.model_loaded = False
+        finally:
+            self.model_loading = False
 
     def is_supported_format(self, filename):
         """Check if the audio file format is supported"""
@@ -183,8 +192,13 @@ class VoiceProcessor:
         Returns:
             dict: Transcription result with text and metadata
         """
+        # Lazy load the model on first use
+        if not self.model_loaded and not self.model_loading:
+            logger.info("🔄 Loading Whisper model on first use...")
+            self.load_model()
+
         if not self.model_loaded:
-            return {"success": False, "error": "Whisper model not loaded"}
+            return {"success": False, "error": "Whisper model failed to load"}
 
         if not os.path.exists(audio_file_path):
             return {"success": False, "error": "Audio file not found"}
@@ -233,8 +247,10 @@ class VoiceProcessor:
 
     def get_model_info(self):
         """Get information about the loaded model"""
-        if not self.model_loaded:
-            return "❌ No model loaded"
+        if self.model_loading:
+            return {"status": "Loading Whisper model...", "device": self.device}
+        elif not self.model_loaded:
+            return {"status": "Model will load on first use", "device": self.device}
 
         return {
             "model": "medium",
@@ -247,20 +263,344 @@ class VoiceProcessor:
         }
 
 
+class ButtonConfig:
+    """Load and manage button configuration from JSON file"""
+
+    def __init__(self, config_file: str = "button_config.json"):
+        self.config_file = config_file
+        self.config: Dict[str, Any] = {}
+        self.current_os = self._get_os_key()
+        self.load_config()
+
+    def _get_os_key(self) -> str:
+        """Get the OS key for configuration lookup"""
+        os_name = platform.system().lower()
+        if os_name == "darwin":
+            return "macos"
+        elif os_name == "windows":
+            return "windows"
+        else:
+            return "linux"
+
+    def load_config(self):
+        """Load button configuration from JSON file"""
+        try:
+            with open(self.config_file, "r", encoding="utf-8") as f:
+                self.config = json.load(f)
+            logger.info(f"✅ Loaded button configuration from {self.config_file}")
+        except FileNotFoundError:
+            logger.error(f"❌ Configuration file {self.config_file} not found")
+            self.config = {"buttons": [], "button_groups": {}}
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Invalid JSON in {self.config_file}: {e}")
+            self.config = {"buttons": [], "button_groups": {}}
+
+    def get_buttons_by_group(self, group: str) -> List[Dict[str, Any]]:
+        """Get all buttons for a specific group"""
+        return [
+            btn for btn in self.config.get("buttons", []) if btn.get("group") == group
+        ]
+
+    def get_button_label(self, button: Dict[str, Any]) -> str:
+        """Get OS-appropriate label for a button"""
+        label = button.get("label", "")
+        if isinstance(label, dict):
+            return label.get(self.current_os, label.get("linux", "Unknown"))
+        return label
+
+    def get_key_combination(self, button: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Get OS-appropriate key combination for a button"""
+        key_combo = button.get("key_combination")
+        if not key_combo:
+            return None
+
+        # Handle simple key combinations (like enter only)
+        if "keys" in key_combo:
+            return {"keys": key_combo["keys"]}
+
+        # Handle OS-specific combinations
+        return key_combo.get(self.current_os, key_combo.get("linux"))
+
+
+class KeySimulator:
+    """Generic key simulation handler that works across all operating systems"""
+
+    def __init__(self):
+        self.current_os = platform.system()
+
+    def simulate_key_combination(self, key_config: Dict[str, Any]) -> bool:
+        """
+        Simulate a key combination based on configuration
+
+        Args:
+            key_config: Dictionary containing key combination details
+
+        Returns:
+            bool: True if simulation was successful, False otherwise
+        """
+        if not KEYBOARD_AVAILABLE:
+            logger.error("❌ Keyboard simulation not available")
+            return False
+
+        try:
+            # Handle simple single key presses
+            if "keys" in key_config:
+                return self._simulate_simple_keys(key_config["keys"])
+
+            # Handle modifier + key combinations
+            modifiers = key_config.get("modifiers", [])
+            key = key_config.get("key")
+            vk_codes = key_config.get("vk_codes", {})
+
+            if not key:
+                logger.error("❌ No key specified in key configuration")
+                return False
+
+            return self._simulate_modifier_combination(modifiers, key, vk_codes)
+
+        except Exception as e:
+            logger.error(f"❌ Key simulation failed: {e}")
+            return False
+
+    def _simulate_simple_keys(self, keys: List[str]) -> bool:
+        """Simulate simple key presses without modifiers"""
+        for key_name in keys:
+            if not self._press_key(key_name):
+                return False
+        return True
+
+    def _simulate_modifier_combination(
+        self, modifiers: List[str], key: str, vk_codes: Dict[str, str]
+    ) -> bool:
+        """Simulate key combination with modifiers"""
+        if self.current_os == "Windows" and WINDOWS_FALLBACK and vk_codes:
+            return self._simulate_windows_native(modifiers, key, vk_codes)
+        elif PYNPUT_AVAILABLE:
+            return self._simulate_pynput(modifiers, key)
+        else:
+            logger.error("❌ No available key simulation method")
+            return False
+
+    def _simulate_windows_native(
+        self, modifiers: List[str], key: str, vk_codes: Dict[str, str]
+    ) -> bool:
+        """Use Windows native API for key simulation"""
+        try:
+            # Press modifiers down
+            for modifier in modifiers:
+                vk_code = vk_codes.get(modifier)
+                if vk_code:
+                    user32.keybd_event(int(vk_code, 16), 0, 0, 0)
+
+            # Press main key
+            key_vk = vk_codes.get(key)
+            if key_vk:
+                user32.keybd_event(int(key_vk, 16), 0, 0, 0)  # Key down
+                user32.keybd_event(int(key_vk, 16), 0, 2, 0)  # Key up
+
+            # Release modifiers
+            for modifier in reversed(modifiers):
+                vk_code = vk_codes.get(modifier)
+                if vk_code:
+                    user32.keybd_event(int(vk_code, 16), 0, 2, 0)
+
+            logger.info(
+                f"✅ Windows native key simulation: {'+'.join(modifiers + [key])}"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Windows native simulation failed: {e}")
+            return False
+
+    def _simulate_pynput(self, modifiers: List[str], key: str) -> bool:
+        """Use pynput for key simulation"""
+        try:
+            # Convert key name to pynput key
+            pynput_key = self._get_pynput_key(key)
+
+            # Handle combinations with modifiers
+            if modifiers:
+                # Create nested context managers for modifiers
+                if "cmd" in modifiers and "shift" in modifiers:
+                    with keyboard_controller.pressed(Key.cmd):
+                        with keyboard_controller.pressed(Key.shift):
+                            keyboard_controller.press(pynput_key)
+                            keyboard_controller.release(pynput_key)
+                elif "ctrl" in modifiers and "shift" in modifiers:
+                    with keyboard_controller.pressed(Key.ctrl):
+                        with keyboard_controller.pressed(Key.shift):
+                            keyboard_controller.press(pynput_key)
+                            keyboard_controller.release(pynput_key)
+                elif "cmd" in modifiers:
+                    with keyboard_controller.pressed(Key.cmd):
+                        keyboard_controller.press(pynput_key)
+                        keyboard_controller.release(pynput_key)
+                elif "ctrl" in modifiers:
+                    with keyboard_controller.pressed(Key.ctrl):
+                        keyboard_controller.press(pynput_key)
+                        keyboard_controller.release(pynput_key)
+                elif "shift" in modifiers:
+                    with keyboard_controller.pressed(Key.shift):
+                        keyboard_controller.press(pynput_key)
+                        keyboard_controller.release(pynput_key)
+            else:
+                # No modifiers, just press the key
+                keyboard_controller.press(pynput_key)
+                keyboard_controller.release(pynput_key)
+
+            logger.info(f"✅ pynput key simulation: {'+'.join(modifiers + [key])}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ pynput simulation failed: {e}")
+            return False
+
+    def _get_pynput_key(self, key_name: str):
+        """Convert key name to pynput key object"""
+        if key_name == "enter":
+            return Key.enter
+        elif key_name == "backspace":
+            return Key.backspace
+        elif key_name == "space":
+            return Key.space
+        elif key_name == "tab":
+            return Key.tab
+        else:
+            # For letter keys, return as string
+            return key_name
+
+    def _press_key(self, key_name: str) -> bool:
+        """Press a single key"""
+        try:
+            if self.current_os == "Windows" and WINDOWS_FALLBACK:
+                # Use Windows native API for simple keys
+                if key_name == "enter":
+                    user32.keybd_event(0x0D, 0, 0, 0)  # Enter down
+                    user32.keybd_event(0x0D, 0, 2, 0)  # Enter up
+                    return True
+
+            if PYNPUT_AVAILABLE:
+                pynput_key = self._get_pynput_key(key_name)
+                keyboard_controller.press(pynput_key)
+                keyboard_controller.release(pynput_key)
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"❌ Single key press failed: {e}")
+            return False
+
+
+class ButtonFactory:
+    """Factory class to create and manage UI buttons from configuration"""
+
+    def __init__(self, text_app_instance):
+        self.app = text_app_instance
+        self.config = ButtonConfig()
+        self.key_simulator = KeySimulator()
+
+    def create_button(self, button_config: Dict[str, Any]):
+        """Create a UI button from configuration"""
+        button_id = button_config.get("id")
+        label = self.config.get_button_label(button_config)
+        style_class = button_config.get("style_class", "")
+
+        # Use simple classes that work well with dark mode
+        tailwind_classes = "flex-1 p-2 m-1"
+
+        if "copy-button" in style_class:
+            tailwind_classes += " bg-positive"
+        elif "clear-button" in style_class:
+            tailwind_classes += " bg-negative"
+        elif "voice-button" in style_class:
+            tailwind_classes += " bg-primary"
+        elif "upload-button" in style_class:
+            tailwind_classes += " bg-secondary"
+        else:
+            tailwind_classes += " bg-accent"
+
+        # Create button with appropriate callback
+        callback = self._get_button_callback(button_config)
+        button = ui.button(label, on_click=callback).classes(tailwind_classes)
+
+        logger.info(f"✅ Created button: {button_id} - {label}")
+        return button
+
+    def _get_button_callback(self, button_config: Dict[str, Any]):
+        """Get the appropriate callback function for a button"""
+        action = button_config.get("action")
+        button_id = button_config.get("id")
+
+        if action == "copy_text":
+            return self.app.copy_current_text
+        elif action == "clear_text":
+            return self.app.clear_text
+        elif action == "simulate_key":
+            return lambda: self._handle_key_simulation(button_config)
+        elif action == "toggle_voice_recording":
+            return None  # Voice button has special handling
+        else:
+            logger.warning(f"⚠️ Unknown action for button {button_id}: {action}")
+            return lambda: self.app.show_status(
+                f"Action not implemented: {action}", "error"
+            )
+
+    def _handle_key_simulation(self, button_config: Dict[str, Any]):
+        """Handle key simulation for a button"""
+        button_id = button_config.get("id")
+        key_config = self.config.get_key_combination(button_config)
+
+        if not key_config:
+            logger.error(f"❌ No key configuration for button {button_id}")
+            self.app.show_status(f"No key configuration for {button_id}", "error")
+            return
+
+        logger.info(f"🎹 Simulating key combination for {button_id}")
+
+        if self.key_simulator.simulate_key_combination(key_config):
+            self.app.show_status(
+                f"{button_config.get('description', button_id)} executed!", "success"
+            )
+        else:
+            self.app.show_status(f"Failed to execute {button_id}", "error")
+
+    def get_buttons_for_group(self, group: str) -> List:
+        """Get all UI buttons for a specific group"""
+        buttons = []
+        button_configs = self.config.get_buttons_by_group(group)
+
+        for button_config in button_configs:
+            if button_config.get("unique_logic"):
+                # Skip buttons with unique logic (like voice recording)
+                continue
+            buttons.append(self.create_button(button_config))
+
+        return buttons
+
+
 class TextInputApp:
     def __init__(self):
-        self.current_text = ""
-        self.text_history = []
         self.max_history = 10
         self.storage_key = "shared_text"
         self.history_key = "shared_history"
 
         # Initialize voice processor
         self.voice_processor = VoiceProcessor() if WHISPER_AVAILABLE else None
-        self.voice_enabled = WHISPER_AVAILABLE and self.voice_processor.model_loaded
+        self.voice_enabled = WHISPER_AVAILABLE
 
         # Initialize instance management
         self.cursor_instances = []
+
+        # Initialize button factory for configuration-driven UI
+        self.button_factory = ButtonFactory(self)
+
+        # Initialize voice recording state
+        self.is_recording = False
+
+        # Load history from storage once on startup
+        self.text_history = app.storage.general.get(self.history_key, [])
 
         logger.info("📱 TextInputApp initialized")
         if self.voice_enabled:
@@ -355,39 +695,6 @@ class TextInputApp:
 
         except Exception as e:
             logger.error(f"❌ Failed to simulate paste: {e}")
-            return False
-
-    def simulate_enter(self):
-        """Simulate Enter key press"""
-        if not KEYBOARD_AVAILABLE:
-            logger.error("❌ Keyboard simulation not available - cannot simulate Enter")
-            return False
-
-        try:
-            logger.info("⏎ Simulating Enter key press")
-
-            if CURRENT_OS == "Windows":
-                # Try Windows native method first
-                if WINDOWS_FALLBACK:
-                    logger.info("🔧 Using Windows native Enter key simulation")
-                    # Windows VK code: Enter = 0x0D
-                    user32.keybd_event(0x0D, 0, 0, 0)  # Enter down
-                    user32.keybd_event(0x0D, 0, 2, 0)  # Enter up
-                    logger.info(
-                        "✅ Windows native Enter key operation completed successfully"
-                    )
-                    return True
-
-            # Fallback to pynput for all systems
-            if PYNPUT_AVAILABLE:
-                logger.info("🔧 Using pynput for Enter key simulation")
-                keyboard_controller.press(Key.enter)
-                keyboard_controller.release(Key.enter)
-                logger.info("✅ pynput Enter key operation completed successfully")
-                return True
-
-        except Exception as e:
-            logger.error(f"❌ Failed to simulate Enter key: {e}")
             return False
 
     def simulate_accept(self):
@@ -690,7 +997,11 @@ class TextInputApp:
                     ):
                         logger.info("⏎ Auto-Enter enabled - pressing Enter after paste")
                         time.sleep(0.1)  # Small delay between paste and enter
-                        self.simulate_enter()
+                        # Use the new key simulation system
+                        key_config = {"keys": ["enter"]}
+                        self.button_factory.key_simulator.simulate_key_combination(
+                            key_config
+                        )
 
                     logger.info("✅ Auto-paste operation completed successfully")
                     return True
@@ -716,57 +1027,10 @@ class TextInputApp:
                 if len(self.text_history) > self.max_history:
                     self.text_history = self.text_history[: self.max_history]
 
-                # Sync to storage for cross-device synchronization
-                self.sync_to_storage()
+                # Save updated history to storage
+                app.storage.general[self.history_key] = self.text_history
             else:
                 logger.debug("📝 Text already exists in history, skipping duplicate")
-
-    def sync_to_storage(self):
-        """Sync current text and history to shared storage"""
-        try:
-            app.storage.general[self.storage_key] = self.current_text
-            app.storage.general[self.history_key] = self.text_history
-            logger.debug("💾 Successfully synced data to storage")
-        except Exception as e:
-            logger.error(f"❌ Failed to sync to storage: {e}")
-
-    def sync_from_storage(self):
-        """Sync text and history from shared storage"""
-        try:
-            # Load text from storage
-            stored_text = app.storage.general.get(self.storage_key, "")
-            if stored_text != self.current_text:
-                logger.debug(
-                    f"🔄 Syncing text from storage: '{stored_text[:30]}{'...' if len(stored_text) > 30 else ''}'"
-                )
-                self.current_text = stored_text
-                if hasattr(self, "text_area"):
-                    self.text_area.set_value(stored_text)
-
-            # Load history from storage
-            stored_history = app.storage.general.get(self.history_key, [])
-            if stored_history != self.text_history:
-                logger.debug(
-                    f"🔄 Syncing history from storage: {len(stored_history)} entries"
-                )
-                self.text_history = stored_history
-                if hasattr(self, "history_container"):
-                    self.update_history_display()
-        except Exception as e:
-            logger.error(f"❌ Failed to sync from storage: {e}")
-
-    def start_storage_sync(self):
-        """Start periodic sync with storage"""
-        logger.info("🔄 Starting periodic storage synchronization")
-
-        def sync_timer():
-            try:
-                self.sync_from_storage()
-            except Exception as e:
-                logger.error(f"❌ Storage sync error: {e}")
-
-        # Use NiceGUI timer for periodic sync
-        ui.timer(1.0, sync_timer)  # Check every second
 
     def create_ui(self):
         """Create the main UI"""
@@ -779,154 +1043,7 @@ class TextInputApp:
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <meta name="apple-mobile-web-app-capable" content="yes">
             <meta name="apple-mobile-web-app-status-bar-style" content="default">
-            <style>
-                .text-input-container {
-                    width: 100%;
-                    max-width: 600px;
-                    margin: 0 auto;
-                }
-                .mobile-textarea {
-                    width: 100% !important;
-                    min-height: 200px !important;
-                    font-size: 16px !important;
-                    padding: 15px !important;
-                    border-radius: 8px !important;
-                    border: 2px solid #ddd !important;
-                    resize: vertical !important;
-                }
-                .mobile-textarea:focus {
-                    border-color: #4CAF50 !important;
-                    outline: none !important;
-                }
-                .action-button {
-                    flex: 1 !important;
-                    padding: 15px !important;
-                    font-size: 16px !important;
-                    margin: 5px !important;
-                    border-radius: 8px !important;
-                    min-width: 0 !important;
-                }
-                .copy-button {
-                    background-color: #4CAF50 !important;
-                    color: white !important;
-                }
-                .clear-button {
-                    background-color: #f44336 !important;
-                    color: white !important;
-                }
-                .history-item {
-                    background-color: #f5f5f5 !important;
-                    padding: 10px !important;
-                    margin: 5px 0 !important;
-                    border-radius: 5px !important;
-                    border-left: 4px solid #4CAF50 !important;
-                }
-                .header {
-                    text-align: center !important;
-                    padding: 20px 0 !important;
-                    background-color: #f8f9fa !important;
-                    margin-bottom: 20px !important;
-                }
-                .footer {
-                    text-align: center !important;
-                    padding: 20px 0 !important;
-                    color: #666 !important;
-                    font-size: 14px !important;
-                }
-                .voice-button {
-                    background-color: #2196F3 !important;
-                    color: white !important;
-                }
-                .upload-button {
-                    background-color: #FF9800 !important;
-                    color: white !important;
-                    border: 2px dashed #FF9800 !important;
-                }
-                .voice-info {
-                    background-color: #E8F5E8 !important;
-                    padding: 10px !important;
-                    border-radius: 5px !important;
-                    margin: 10px 0 !important;
-                }
-                
-                /* Responsive button layout */
-                @media (max-width: 480px) {
-                    .action-button {
-                        font-size: 14px !important;
-                        padding: 12px 8px !important;
-                        margin: 3px !important;
-                    }
-                }
-                
-                /* Ensure buttons wrap on very small screens */
-                @media (max-width: 360px) {
-                    .action-button {
-                        flex-basis: 48% !important;
-                        margin: 2px !important;
-                    }
-                }
-                
-                /* UI Grouping styles */
-                .settings-section {
-                    background-color: #f8f9fa !important;
-                    border-radius: 8px !important;
-                    padding: 15px !important;
-                    margin: 10px 0 !important;
-                    border-left: 4px solid #4CAF50 !important;
-                }
-                
-                .status-section {
-                    background-color: #f0f8ff !important;
-                    border-radius: 8px !important;
-                    padding: 15px !important;
-                    margin: 10px 0 !important;
-                    border-left: 4px solid #2196F3 !important;
-                }
-                
-                .section-title {
-                    margin-bottom: 12px !important;
-                    font-weight: 600 !important;
-                    color: #333 !important;
-                }
-                
-                .instance-tab-selected {
-                    background-color: #4CAF50 !important;
-                    color: white !important;
-                    border: 2px solid #4CAF50 !important;
-                    font-weight: bold !important;
-                }
-                
-                .instance-tab {
-                    background-color: #f5f5f5 !important;
-                    color: #333 !important;
-                    border: 1px solid #ddd !important;
-                }
-                
-                .instance-section {
-                    background-color: #f0f8ff !important;
-                    border-radius: 8px !important;
-                    padding: 15px !important;
-                    margin: 10px 0 !important;
-                    border-left: 4px solid #2196F3 !important;
-                }
-                
-                /* Recording animation */
-                @keyframes pulse-red {
-                    0% {
-                        transform: scale(1);
-                        box-shadow: 0 0 15px rgba(211, 47, 47, 0.5);
-                    }
-                    50% {
-                        transform: scale(1.05);
-                        box-shadow: 0 0 25px rgba(211, 47, 47, 0.8);
-                    }
-                    100% {
-                        transform: scale(1);
-                        box-shadow: 0 0 15px rgba(211, 47, 47, 0.5);
-                    }
-                }
-            </style>
-        """
+            """
         )
 
         # Instance Management Tabs (macOS and Windows)
@@ -1030,56 +1147,39 @@ class TextInputApp:
                 panels.on("update:model-value", on_panel_change)
 
         # Main content container
-        with ui.column().classes("text-input-container"):
-            # Text input area
-            self.text_area = ui.textarea(
-                placeholder="Type your text here...", value=""
-            ).classes("mobile-textarea")
+        with ui.column().classes("w-full max-w-2xl mx-auto"):
+            # Text input area with direct storage binding
+            self.text_area = (
+                ui.textarea(placeholder="Type your text here...")
+                .props("clearable")
+                .bind_value(app.storage.general, self.storage_key)
+            )
 
-            # Action buttons (including voice if available)
-            with ui.row().classes("w-full"):
-                self.copy_button = ui.button(
-                    "Copy", on_click=self.copy_current_text
-                ).classes("action-button copy-button")
-
-                self.enter_button = ui.button(
-                    "Enter", on_click=self.press_enter_key
-                ).classes("action-button copy-button")
-
-                # Add voice button if available
-                if self.voice_enabled:
+            # Voice input section (separate from other buttons)
+            if self.voice_enabled:
+                with ui.row().classes("w-full"):
                     self.voice_button = ui.button(
-                        "Start Recording", on_click=None
-                    ).classes("action-button voice-button")
+                        "Start Recording", on_click=self.toggle_voice_recording
+                    ).classes("flex-1 p-2 m-1 bg-primary")
 
-                self.clear_button = ui.button(
-                    "Clear", on_click=self.clear_text
-                ).classes("action-button clear-button")
-
-            # Extended keyboard shortcuts row
+            # Main action buttons (from configuration)
             with ui.row().classes("w-full"):
-                cmd_key = "Cmd" if IS_MACOS else "Ctrl"
+                main_buttons = self.button_factory.get_buttons_for_group("main")
+                for button in main_buttons:
+                    # Buttons are already created by the factory
+                    pass
 
-                self.accept_button = ui.button(
-                    f"Accept ({cmd_key}+↵)", on_click=self.press_accept_key
-                ).classes("action-button copy-button")
-
-                self.reject_button = ui.button(
-                    f"Reject ({cmd_key}+⌫)", on_click=self.press_reject_key
-                ).classes("action-button clear-button")
-
-                self.new_button = ui.button(
-                    f"New ({cmd_key}+N)", on_click=self.press_new_key
-                ).classes("action-button copy-button")
-
-                self.stop_button = ui.button(
-                    f"Stop ({cmd_key}+⇧+⌫)", on_click=self.press_stop_key
-                ).classes("action-button clear-button")
+            # Extended keyboard shortcuts row (from configuration)
+            with ui.row().classes("w-full border"):
+                extended_buttons = self.button_factory.get_buttons_for_group("extended")
+                for button in extended_buttons:
+                    # Buttons are already created by the factory
+                    pass
 
             # Settings section - group toggles together
-            with ui.column().classes("w-full settings-section"):
-                ui.label("Settings").classes("section-title")
-                with ui.column().style("gap: 8px;"):
+            with ui.column().classes("w-full border"):
+                ui.label("Settings")
+                with ui.column():
                     paste_key = "Cmd+V" if IS_MACOS else "Ctrl+V"
                     self.auto_paste_toggle = ui.checkbox(
                         f"Auto-paste when copying to clipboard ({paste_key})",
@@ -1091,49 +1191,38 @@ class TextInputApp:
                     )
 
             # Status section - group all status info together
-            with ui.column().classes("w-full status-section"):
-                ui.label("System Status").classes("section-title")
-                with ui.column().style("gap: 4px;"):
+            with ui.column().classes("w-full p-2 my-2"):
+                ui.label("System Status").classes("mb-2")
+                with ui.column():
                     # Voice status
                     if self.voice_enabled:
                         voice_info = self.voice_processor.get_model_info()
-                        ui.label(
-                            f"🎤 Voice: Whisper {voice_info['model']} ready • Button turns red when recording"
-                        ).classes("text-caption text-green")
-                    else:
-                        ui.label("❌ Voice-to-text not available").classes(
-                            "text-caption text-red"
-                        )
-                        if not WHISPER_AVAILABLE:
-                            ui.label("📦 Install: pip install openai-whisper").classes(
-                                "text-caption text-red"
+                        if "status" in voice_info:
+                            ui.label(
+                                f"🎤 Voice: {voice_info['status']} • Button turns red when recording"
                             )
+                        else:
+                            ui.label(
+                                f"🎤 Voice: Whisper {voice_info['model']} ready • Button turns red when recording"
+                            )
+                    else:
+                        ui.label("❌ Voice-to-text not available")
+                        if not WHISPER_AVAILABLE:
+                            ui.label("📦 Install: pip install openai-whisper")
 
                     # Keyboard simulation status
                     if WINDOWS_FALLBACK:
-                        ui.label("✅ Windows native keyboard simulation").classes(
-                            "text-caption text-green"
-                        )
+                        ui.label("✅ Windows native keyboard simulation")
                     elif PYNPUT_AVAILABLE:
-                        ui.label("✅ pynput keyboard simulation").classes(
-                            "text-caption text-green"
-                        )
+                        ui.label("✅ pynput keyboard simulation")
                     else:
-                        ui.label("⚠️ Keyboard simulation not available").classes(
-                            "text-caption text-orange"
-                        )
+                        ui.label("⚠️ Keyboard simulation not available")
                         if not KEYBOARD_AVAILABLE:
-                            ui.label("📦 Install pynput: pip install pynput").classes(
-                                "text-caption text-red"
-                            )
+                            ui.label("📦 Install pynput: pip install pynput")
 
                     # Storage synchronization status
-                    ui.label("✅ Cross-device synchronization enabled").classes(
-                        "text-caption text-blue"
-                    )
-                    ui.label(
-                        "📱 Text syncs across all devices and browser tabs"
-                    ).classes("text-caption text-blue")
+                    ui.label("✅ Cross-device synchronization enabled")
+                    ui.label("📱 Text syncs across all devices and browser tabs")
 
             # Add JavaScript for voice functionality if enabled
             if self.voice_enabled:
@@ -1143,56 +1232,9 @@ class TextInputApp:
                     let mediaRecorder;
                     let audioChunks = [];
                     let isRecording = false;
-                    let pollInterval;
                     let microphonePermissionGranted = false;
                     let audioStream = null;
-                    
-                    // Function to request microphone permissions upfront
-                    async function requestMicrophonePermission() {
-                        try {
-                            // Request microphone access
-                            audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                            microphonePermissionGranted = true;
-                            
-                            // Update button state to ready for recording
-                            const button = document.querySelector('.voice-button');
-                            if (button) {
-                                button.disabled = false;
-                                button.textContent = 'Start Recording';
-                                button.style.opacity = '1';
-                                button.style.backgroundColor = '#2196F3';
-                                button.style.color = 'white';
-                                button.style.border = 'none';
-                                button.style.boxShadow = 'none';
-                                button.style.fontWeight = 'normal';
-                                button.style.animation = 'none';
-                            }
-                            
-                            // Show success message
-                            showStatus('Microphone access granted! Ready to record.', 'success');
-                            
-                            // Stop the stream for now - we'll create a new one when recording
-                            audioStream.getTracks().forEach(track => track.stop());
-                            audioStream = null;
-                            
-                        } catch (error) {
-                            console.error('Error requesting microphone permission:', error);
-                            microphonePermissionGranted = false;
-                            
-                            // Update button state
-                            const button = document.querySelector('.voice-button');
-                            if (button) {
-                                button.disabled = true;
-                                button.textContent = 'Microphone Access Denied';
-                                button.style.opacity = '0.5';
-                                button.style.backgroundColor = '#757575';
-                            }
-                            
-                            // Show error message
-                            showStatus('Microphone access denied. Please enable microphone permissions in your browser settings.', 'error');
-                        }
-                    }
-                    
+                                        
                     // Function to show status messages
                     function showStatus(message, type = 'info') {
                         // Create a temporary notification element
@@ -1220,57 +1262,14 @@ class TextInputApp:
                         }, 3000);
                     }
                     
-                    // Function to update text area
-                    function updateTextArea(newText) {
-                        const textarea = document.querySelector('.mobile-textarea textarea');
-                        if (textarea) {
-                            const currentText = textarea.value || '';
-                            const updatedText = currentText ? currentText + '\\n' + newText : newText;
-                            textarea.value = updatedText;
-                            
-                            // Trigger input event to sync with backend
-                            const event = new Event('input', { bubbles: true });
-                            textarea.dispatchEvent(event);
-                        }
-                    }
-                    
-                    // Function to poll for voice results
-                    function pollForResults() {
-                        fetch('/check-voice-result')
-                            .then(response => response.json())
-                            .then(data => {
-                                if (data.success && data.result) {
-                                    const result = data.result;
-                                    updateTextArea(result.text);
-                                    showStatus(
-                                        `Transcribed in ${result.processing_time.toFixed(1)}s (Language: ${result.language})`,
-                                        'success'
-                                    );
-                                    
-                                    // Stop polling
-                                    if (pollInterval) {
-                                        clearInterval(pollInterval);
-                                        pollInterval = null;
-                                    }
-                                }
-                            })
-                            .catch(error => {
-                                console.error('Error polling for results:', error);
-                            });
-                    }
-                    
                     async function startRecording() {
                         if (isRecording) return;
                         
-                        // Check if microphone permission was granted
-                        if (!microphonePermissionGranted) {
-                            showStatus('Microphone access not granted. Please allow microphone access and refresh the page.', 'error');
-                            return;
-                        }
-                        
                         try {
-                            // Request fresh stream for recording
+                            // Request microphone permission and start recording
                             audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                            microphonePermissionGranted = true;
+                            
                             mediaRecorder = new MediaRecorder(audioStream);
                             audioChunks = [];
                             
@@ -1296,10 +1295,7 @@ class TextInputApp:
                                 .then(response => response.json())
                                 .then(data => {
                                     if (data.success) {
-                                        // Start polling for results
-                                        pollInterval = setInterval(pollForResults, 100);
-                                        // Also check immediately
-                                        pollForResults();
+                                        showStatus('Audio processed successfully', 'success');
                                     } else {
                                         showStatus(`Transcription failed: ${data.error}`, 'error');
                                     }
@@ -1320,78 +1316,26 @@ class TextInputApp:
                             mediaRecorder.start();
                             isRecording = true;
                             
-                            // Update button text and style for recording state
-                            const button = document.querySelector('.voice-button');
-                            if (button) {
-                                button.textContent = '🔴 Recording... (Click to Stop)';
-                                button.style.backgroundColor = '#d32f2f';
-                                button.style.color = 'white';
-                                button.style.border = '2px solid #b71c1c';
-                                button.style.boxShadow = '0 0 15px rgba(211, 47, 47, 0.5)';
-                                button.style.fontWeight = 'bold';
-                                // Add pulsing animation
-                                button.style.animation = 'pulse-red 1.5s infinite';
-                            }
-                            
                         } catch (error) {
                             console.error('Error accessing microphone:', error);
-                            showStatus('Error accessing microphone. Please check permissions.', 'error');
+                            microphonePermissionGranted = false;
+                            
+                            if (error.name === 'NotAllowedError') {
+                                showStatus('Microphone access denied. Please allow microphone access and try again.', 'error');
+                            } else if (error.name === 'NotFoundError') {
+                                showStatus('No microphone found. Please connect a microphone and try again.', 'error');
+                            } else {
+                                showStatus('Error accessing microphone. Please check your browser settings.', 'error');
+                            }
                         }
                     }
                     
                     function stopRecording() {
                         if (mediaRecorder && isRecording) {
                             mediaRecorder.stop();
-                            
-                            // Reset button text and style to normal state
-                            const button = document.querySelector('.voice-button');
-                            if (button) {
-                                button.textContent = 'Start Recording';
-                                button.style.backgroundColor = '#2196F3';
-                                button.style.color = 'white';
-                                button.style.border = 'none';
-                                button.style.boxShadow = 'none';
-                                button.style.fontWeight = 'normal';
-                                button.style.animation = 'none';
-                            }
                         }
-                    }
+                    };
                     
-                    // Toggle recording function
-                    function toggleRecording() {
-                        if (isRecording) {
-                            stopRecording();
-                        } else {
-                            startRecording();
-                        }
-                    }
-                    
-                    // Add event listeners when page loads
-                    document.addEventListener('DOMContentLoaded', function() {
-                        setTimeout(() => {
-                            const button = document.querySelector('.voice-button');
-                            if (button) {
-                                // Initialize button as disabled until permission is granted
-                                button.disabled = true;
-                                button.textContent = 'Requesting Microphone...';
-                                button.style.opacity = '0.5';
-                                
-                                // Single click event for both desktop and mobile
-                                button.addEventListener('click', (e) => {
-                                    e.preventDefault();
-                                    toggleRecording();
-                                });
-                                
-                                // Prevent context menu on long press (mobile)
-                                button.addEventListener('contextmenu', (e) => {
-                                    e.preventDefault();
-                                });
-                                
-                                // Request microphone permission
-                                requestMicrophonePermission();
-                            }
-                        }, 100);
-                    });
                     </script>
                 """
                 )
@@ -1402,33 +1346,22 @@ class TextInputApp:
             self.history_container = ui.column().classes("w-full")
 
         # Footer
-        with ui.column().classes("footer"):
+        with ui.column().classes("w-full p-2 mt-4"):
             paste_key = "Cmd+V" if IS_MACOS else "Ctrl+V"
             ui.label(
                 "Tap text area to start typing • Text syncs across all devices and tabs"
             )
             ui.label(f"Copy to clipboard • Auto-paste with {paste_key} on server")
 
-        # Set up event handlers
-        self.text_area.on("input", self.on_text_change)
-
-        # Initialize from storage and start sync
-        self.sync_from_storage()
-        self.start_storage_sync()
+        # Text area is bound directly to storage, so changes are automatic
+        # Update history display on startup
         self.update_history_display()
-
-    def on_text_change(self, event):
-        """Handle text change events"""
-        text = event.value if event.value else ""
-        self.current_text = text  # Keep internal state synchronized
-
-        # Sync to storage for cross-device synchronization
-        self.sync_to_storage()
 
     def copy_current_text(self):
         """Copy current text to clipboard with user feedback"""
-        # Get text directly from the text area widget to ensure we have the current value
-        text = self.text_area.value.strip() if self.text_area.value else ""
+        # Get text from storage
+        current_text = app.storage.general.get(self.storage_key, "")
+        text = current_text.strip() if current_text else ""
 
         if not text:
             logger.warning("⚠️ Copy operation attempted with no text")
@@ -1445,9 +1378,7 @@ class TextInputApp:
 
             # Clear text area after successful copy
             logger.info("🗑️ Clearing text area after successful copy")
-            self.text_area.set_value("")
-            self.current_text = ""
-            self.sync_to_storage()
+            app.storage.general[self.storage_key] = ""
 
             # Auto-paste if enabled
             if self.auto_paste_toggle.value:
@@ -1464,7 +1395,11 @@ class TextInputApp:
                     ):
                         logger.info("⏎ Auto-Enter enabled, pressing Enter after paste")
                         time.sleep(0.1)  # Small delay between paste and enter
-                        self.simulate_enter()
+                        # Use the new key simulation system
+                        key_config = {"keys": ["enter"]}
+                        self.button_factory.key_simulator.simulate_key_combination(
+                            key_config
+                        )
 
                     logger.info(
                         "✅ Copy and auto-paste operation completed successfully"
@@ -1479,73 +1414,6 @@ class TextInputApp:
         else:
             logger.error("❌ Copy operation failed")
             self.show_status("Failed to copy text", "error")
-
-    def press_enter_key(self):
-        """Press Enter key on the server"""
-        logger.info("⏎ Enter key button pressed")
-
-        if self.simulate_enter():
-            logger.info("✅ Enter key simulation completed successfully")
-            self.show_status("Enter key pressed!", "success")
-        else:
-            logger.error("❌ Enter key simulation failed")
-            self.show_status("Failed to press Enter key", "error")
-
-    def press_accept_key(self):
-        """Press Accept key combination on the server"""
-        cmd_key = "Cmd" if IS_MACOS else "Ctrl"
-        logger.info(f"✅ Accept ({cmd_key}+Enter) button pressed")
-
-        if self.simulate_accept():
-            logger.info(
-                f"✅ Accept ({cmd_key}+Enter) simulation completed successfully"
-            )
-            self.show_status(f"Accept ({cmd_key}+Enter) pressed!", "success")
-        else:
-            logger.error(f"❌ Accept ({cmd_key}+Enter) simulation failed")
-            self.show_status(f"Failed to press Accept ({cmd_key}+Enter)", "error")
-
-    def press_reject_key(self):
-        """Press Reject key combination on the server"""
-        cmd_key = "Cmd" if IS_MACOS else "Ctrl"
-        logger.info(f"🚫 Reject ({cmd_key}+Backspace) button pressed")
-
-        if self.simulate_reject():
-            logger.info(
-                f"✅ Reject ({cmd_key}+Backspace) simulation completed successfully"
-            )
-            self.show_status(f"Reject ({cmd_key}+Backspace) pressed!", "success")
-        else:
-            logger.error(f"❌ Reject ({cmd_key}+Backspace) simulation failed")
-            self.show_status(f"Failed to press Reject ({cmd_key}+Backspace)", "error")
-
-    def press_new_key(self):
-        """Press New key combination on the server"""
-        cmd_key = "Cmd" if IS_MACOS else "Ctrl"
-        logger.info(f"📄 New ({cmd_key}+N) button pressed")
-
-        if self.simulate_new():
-            logger.info(f"✅ New ({cmd_key}+N) simulation completed successfully")
-            self.show_status(f"New ({cmd_key}+N) pressed!", "success")
-        else:
-            logger.error(f"❌ New ({cmd_key}+N) simulation failed")
-            self.show_status(f"Failed to press New ({cmd_key}+N)", "error")
-
-    def press_stop_key(self):
-        """Press Stop key combination on the server"""
-        cmd_key = "Cmd" if IS_MACOS else "Ctrl"
-        logger.info(f"🛑 Stop ({cmd_key}+Shift+Backspace) button pressed")
-
-        if self.simulate_stop():
-            logger.info(
-                f"✅ Stop ({cmd_key}+Shift+Backspace) simulation completed successfully"
-            )
-            self.show_status(f"Stop ({cmd_key}+Shift+Backspace) pressed!", "success")
-        else:
-            logger.error(f"❌ Stop ({cmd_key}+Shift+Backspace) simulation failed")
-            self.show_status(
-                f"Failed to press Stop ({cmd_key}+Shift+Backspace)", "error"
-            )
 
     def copy_to_clipboard_silent(self, text):
         """Copy text to clipboard without showing status"""
@@ -1562,15 +1430,11 @@ class TextInputApp:
 
     def clear_text(self):
         """Clear the text area"""
-        logger.info("🗑️ Clearing text area and syncing across devices")
-        self.text_area.set_value("")
-        self.current_text = ""
+        logger.info("🗑️ Clearing text area")
+        app.storage.general[self.storage_key] = ""
 
-        # Clear storage for cross-device synchronization
-        self.sync_to_storage()
-
-        logger.info("✅ Text cleared successfully on all devices")
-        self.show_status("Text cleared on all devices", "success")
+        logger.info("✅ Text cleared successfully")
+        self.show_status("Text cleared", "success")
 
     def show_status(self, message, status_type="success"):
         """Show status notification to user"""
@@ -1597,22 +1461,20 @@ class TextInputApp:
 
         if not self.text_history:
             with self.history_container:
-                ui.label("No recent text entries").classes("text-caption text-center")
+                ui.label("No recent text entries")
             return
 
         with self.history_container:
             for i, entry in enumerate(self.text_history):
-                with ui.card().classes("history-item w-full"):
+                with ui.card().classes("w-full p-2 my-1"):
                     with ui.row().classes("w-full justify-between items-center"):
                         with ui.column().classes("flex-grow"):
                             # Show preview of text (first 50 chars)
                             preview = entry["text"][:50]
                             if len(entry["text"]) > 50:
                                 preview += "..."
-                            ui.label(preview).classes("text-body2")
-                            ui.label(f"Added: {entry['timestamp']}").classes(
-                                "text-caption"
-                            )
+                            ui.label(preview)
+                            ui.label(f"Added: {entry['timestamp']}")
 
                         with ui.row():
                             ui.button(
@@ -1620,14 +1482,14 @@ class TextInputApp:
                                 on_click=lambda e, text=entry[
                                     "text"
                                 ]: self.copy_from_history(text),
-                            ).classes("copy-button")
+                            ).classes("p-1 m-1 bg-positive")
 
                             ui.button(
                                 "Paste",
                                 on_click=lambda e, text=entry[
                                     "text"
                                 ]: self.paste_from_history(text),
-                            ).classes("copy-button")
+                            ).classes("p-1 m-1 bg-positive")
 
     async def handle_audio_upload(self, event):
         """Handle audio file upload and transcription"""
@@ -1677,16 +1539,14 @@ class TextInputApp:
                 language = result.get("language", "unknown")
 
                 if transcribed_text:
-                    # Add transcribed text to the text area
-                    current_text = self.text_area.value or ""
+                    # Add transcribed text to storage (UI will update automatically)
+                    current_text = app.storage.general.get(self.storage_key, "")
                     if current_text:
-                        new_text = current_text + "\n" + transcribed_text
+                        app.storage.general[self.storage_key] = (
+                            current_text + "\n" + transcribed_text
+                        )
                     else:
-                        new_text = transcribed_text
-
-                    self.text_area.set_value(new_text)
-                    self.current_text = new_text
-                    self.sync_to_storage()
+                        app.storage.general[self.storage_key] = transcribed_text
 
                     # Add to history
                     self.add_to_history(transcribed_text)
@@ -1742,13 +1602,17 @@ class TextInputApp:
                 language = result.get("language", "unknown")
 
                 if transcribed_text:
-                    # Store result in app storage for UI to pick up
-                    app.storage.user["voice_result"] = {
-                        "text": transcribed_text,
-                        "processing_time": processing_time,
-                        "language": language,
-                        "timestamp": time.time(),
-                    }
+                    # Directly update storage
+                    current_text = app.storage.general.get(self.storage_key, "")
+                    if current_text:
+                        app.storage.general[self.storage_key] = (
+                            current_text + "\n" + transcribed_text
+                        )
+                    else:
+                        app.storage.general[self.storage_key] = transcribed_text
+
+                    # Add to history
+                    self.add_to_history(transcribed_text)
 
                     logger.info(
                         f"✅ Push-to-talk transcription successful: {len(transcribed_text)} characters"
@@ -1792,16 +1656,14 @@ class TextInputApp:
                 processing_time = result.get("processing_time", 0)
                 language = result.get("language", "unknown")
 
-                # Add transcribed text to the text area
-                current_text = self.text_area.value or ""
+                # Add transcribed text to storage (UI will update automatically)
+                current_text = app.storage.general.get(self.storage_key, "")
                 if current_text:
-                    new_text = current_text + "\n" + transcribed_text
+                    app.storage.general[self.storage_key] = (
+                        current_text + "\n" + transcribed_text
+                    )
                 else:
-                    new_text = transcribed_text
-
-                self.text_area.set_value(new_text)
-                self.current_text = new_text
-                self.sync_to_storage()
+                    app.storage.general[self.storage_key] = transcribed_text
 
                 # Add to history
                 self.add_to_history(transcribed_text)
@@ -1820,17 +1682,39 @@ class TextInputApp:
             self.show_status(f"Error processing recorded audio: {str(e)}", "error")
             logger.error(f"❌ Push-to-talk audio processing error: {e}")
 
-    def start_voice_recording(self):
-        """Start voice recording (placeholder for future implementation)"""
+    def toggle_voice_recording(self):
+        """Toggle voice recording state and trigger JavaScript recording"""
         if not self.voice_enabled:
             self.show_status("Voice-to-text is not available", "error")
             return
 
-        # This would be implemented with WebRTC MediaRecorder API in the future
-        self.show_status(
-            "Voice recording not yet implemented. Please use file upload.", "info"
-        )
-        logger.info("🎤 Voice recording requested (not yet implemented)")
+        if not self.is_recording:
+            # Start recording
+            logger.info("🎤 Starting voice recording from Python")
+            self.is_recording = True
+
+            # Update button appearance for recording state
+            self.voice_button.set_text("🔴 Recording... (Click to Stop)")
+            self.voice_button.classes("flex-1 p-2 m-1 bg-negative")
+
+            # Trigger JavaScript recording
+            ui.run_javascript(
+                "if (typeof startRecording === 'function') startRecording();"
+            )
+
+        else:
+            # Stop recording
+            logger.info("🛑 Stopping voice recording from Python")
+            self.is_recording = False
+
+            # Reset button appearance to normal state
+            self.voice_button.set_text("🎤 Start Recording")
+            self.voice_button.classes("flex-1 p-2 m-1 bg-primary")
+
+            # Trigger JavaScript stop
+            ui.run_javascript(
+                "if (typeof stopRecording === 'function') stopRecording();"
+            )
 
     def get_cursor_instances_windows(self):
         """Get all Cursor instances on Windows using Windows API"""
@@ -2332,21 +2216,6 @@ def main():
             logger.error(f"❌ API audio processing error: {e}")
             return {"success": False, "error": str(e)}
 
-    @app.get("/check-voice-result")
-    async def check_voice_result():
-        """Check for new voice transcription results"""
-        try:
-            if "voice_result" in app.storage.user:
-                result = app.storage.user["voice_result"]
-                # Clear the result after reading
-                del app.storage.user["voice_result"]
-                return {"success": True, "result": result}
-            else:
-                return {"success": False, "message": "No new results"}
-        except Exception as e:
-            logger.error(f"❌ Error checking voice result: {e}")
-            return {"success": False, "error": str(e)}
-
     # Create the UI
     text_app.create_ui()
 
@@ -2369,6 +2238,7 @@ def main():
         port=8080,
         title="Mobile Text Input",
         reload=True,
+        dark=True,
         show=False,  # Don't auto-open browser
         storage_secret="mobile-text-input-secret-key-2024",  # Enable cross-device storage
     )
