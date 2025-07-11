@@ -4,7 +4,6 @@ Mobile Text Input Web Application
 A web application that allows text input from mobile devices with automatic clipboard copying and keyboard simulation
 """
 
-import socket
 import pyperclip
 from nicegui import ui, app
 from datetime import datetime
@@ -290,50 +289,75 @@ class ButtonConfig:
             logger.info(f"✅ Loaded button configuration from {self.config_file}")
         except FileNotFoundError:
             logger.error(f"❌ Configuration file {self.config_file} not found")
-            self.config = {"buttons": [], "button_groups": {}}
+            self.config = {"buttons": []}
         except json.JSONDecodeError as e:
             logger.error(f"❌ Invalid JSON in {self.config_file}: {e}")
-            self.config = {"buttons": [], "button_groups": {}}
+            self.config = {"buttons": []}
 
-    def get_buttons_by_group(self, group: str) -> List[Dict[str, Any]]:
-        """Get all buttons for a specific group"""
-        return [
-            btn for btn in self.config.get("buttons", []) if btn.get("group") == group
-        ]
+    def get_all_buttons(self) -> List[Dict[str, Any]]:
+        """Get all buttons from the configuration"""
+        return self.config.get("buttons", [])
 
     def get_button_label(self, button: Dict[str, Any]) -> str:
-        """Get OS-appropriate label for a button"""
-        label = button.get("label", "")
-        if isinstance(label, dict):
-            return label.get(self.current_os, label.get("linux", "Unknown"))
-        return label
+        """Get button label (now always a string)"""
+        return button.get("label", "Unknown")
 
-    def get_key_combination(self, button: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Get OS-appropriate key combination for a button"""
-        key_combo = button.get("key_combination")
-        if not key_combo:
+    def get_key_sequence(
+        self, button: Dict[str, Any]
+    ) -> Optional[List[Dict[str, str]]]:
+        """Get OS-appropriate key sequence for a button"""
+        key_sequence = button.get("key_sequence")
+        if not key_sequence:
             return None
 
-        # Handle simple key combinations (like enter only)
-        if "keys" in key_combo:
-            return {"keys": key_combo["keys"]}
+        # Return the sequence for the current OS
+        return key_sequence.get(self.current_os, key_sequence.get("linux"))
 
-        # Handle OS-specific combinations
-        return key_combo.get(self.current_os, key_combo.get("linux"))
+    def get_button_classes(self, button: Dict[str, Any]) -> str:
+        """Get CSS classes for a button with default square styling"""
+        default_classes = "w-24 h-24 bg-blue-500"
+        config_classes = button.get("classes", "")
+
+        if config_classes:
+            return f"{default_classes} {config_classes}"
+        return default_classes
 
 
 class KeySimulator:
-    """Generic key simulation handler that works across all operating systems"""
+    """Sequence-based key simulation handler with hook system"""
 
     def __init__(self):
         self.current_os = platform.system()
+        self.hooks = {}  # Dictionary to store hooks for button IDs
 
-    def simulate_key_combination(self, key_config: Dict[str, Any]) -> bool:
+    def register_hook(self, button_id: str, hook_function):
+        """Register a hook function to be called before key simulation"""
+        if button_id not in self.hooks:
+            self.hooks[button_id] = []
+        self.hooks[button_id].append(hook_function)
+        logger.info(f"🔗 Registered hook for button: {button_id}")
+
+    def execute_hooks(self, button_id: str) -> bool:
+        """Execute all registered hooks for a button"""
+        if button_id in self.hooks:
+            for hook_func in self.hooks[button_id]:
+                try:
+                    result = hook_func()
+                    if (
+                        result is False
+                    ):  # Hook can return False to prevent key simulation
+                        return False
+                except Exception as e:
+                    logger.error(f"❌ Hook execution failed for {button_id}: {e}")
+                    return False
+        return True
+
+    def simulate_key_sequence(self, key_sequence: List[Dict[str, str]]) -> bool:
         """
-        Simulate a key combination based on configuration
+        Simulate a sequence of key actions
 
         Args:
-            key_config: Dictionary containing key combination details
+            key_sequence: List of key actions [{"key": "ctrl", "action": "down"}, ...]
 
         Returns:
             bool: True if simulation was successful, False otherwise
@@ -343,118 +367,129 @@ class KeySimulator:
             return False
 
         try:
-            # Handle simple single key presses
-            if "keys" in key_config:
-                return self._simulate_simple_keys(key_config["keys"])
+            for key_action in key_sequence:
+                key = key_action.get("key")
+                action = key_action.get("action")
 
-            # Handle modifier + key combinations
-            modifiers = key_config.get("modifiers", [])
-            key = key_config.get("key")
-            vk_codes = key_config.get("vk_codes", {})
+                if not key or not action:
+                    logger.error("❌ Invalid key action in sequence")
+                    return False
 
-            if not key:
-                logger.error("❌ No key specified in key configuration")
-                return False
+                success = self._simulate_key_action(key, action)
+                if not success:
+                    return False
 
-            return self._simulate_modifier_combination(modifiers, key, vk_codes)
+                # Small delay between key actions for reliability
+                time.sleep(0.01)
 
-        except Exception as e:
-            logger.error(f"❌ Key simulation failed: {e}")
-            return False
-
-    def _simulate_simple_keys(self, keys: List[str]) -> bool:
-        """Simulate simple key presses without modifiers"""
-        for key_name in keys:
-            if not self._press_key(key_name):
-                return False
-        return True
-
-    def _simulate_modifier_combination(
-        self, modifiers: List[str], key: str, vk_codes: Dict[str, str]
-    ) -> bool:
-        """Simulate key combination with modifiers"""
-        if self.current_os == "Windows" and WINDOWS_FALLBACK and vk_codes:
-            return self._simulate_windows_native(modifiers, key, vk_codes)
-        elif PYNPUT_AVAILABLE:
-            return self._simulate_pynput(modifiers, key)
-        else:
-            logger.error("❌ No available key simulation method")
-            return False
-
-    def _simulate_windows_native(
-        self, modifiers: List[str], key: str, vk_codes: Dict[str, str]
-    ) -> bool:
-        """Use Windows native API for key simulation"""
-        try:
-            # Press modifiers down
-            for modifier in modifiers:
-                vk_code = vk_codes.get(modifier)
-                if vk_code:
-                    user32.keybd_event(int(vk_code, 16), 0, 0, 0)
-
-            # Press main key
-            key_vk = vk_codes.get(key)
-            if key_vk:
-                user32.keybd_event(int(key_vk, 16), 0, 0, 0)  # Key down
-                user32.keybd_event(int(key_vk, 16), 0, 2, 0)  # Key up
-
-            # Release modifiers
-            for modifier in reversed(modifiers):
-                vk_code = vk_codes.get(modifier)
-                if vk_code:
-                    user32.keybd_event(int(vk_code, 16), 0, 2, 0)
-
-            logger.info(
-                f"✅ Windows native key simulation: {'+'.join(modifiers + [key])}"
-            )
             return True
 
         except Exception as e:
-            logger.error(f"❌ Windows native simulation failed: {e}")
+            logger.error(f"❌ Key sequence simulation failed: {e}")
             return False
 
-    def _simulate_pynput(self, modifiers: List[str], key: str) -> bool:
-        """Use pynput for key simulation"""
-        try:
-            # Convert key name to pynput key
-            pynput_key = self._get_pynput_key(key)
+    def _simulate_key_action(self, key: str, action: str) -> bool:
+        """
+        Simulate a single key action (down, up, or press)
 
-            # Handle combinations with modifiers
-            if modifiers:
-                # Create nested context managers for modifiers
-                if "cmd" in modifiers and "shift" in modifiers:
-                    with keyboard_controller.pressed(Key.cmd):
-                        with keyboard_controller.pressed(Key.shift):
-                            keyboard_controller.press(pynput_key)
-                            keyboard_controller.release(pynput_key)
-                elif "ctrl" in modifiers and "shift" in modifiers:
-                    with keyboard_controller.pressed(Key.ctrl):
-                        with keyboard_controller.pressed(Key.shift):
-                            keyboard_controller.press(pynput_key)
-                            keyboard_controller.release(pynput_key)
-                elif "cmd" in modifiers:
-                    with keyboard_controller.pressed(Key.cmd):
-                        keyboard_controller.press(pynput_key)
-                        keyboard_controller.release(pynput_key)
-                elif "ctrl" in modifiers:
-                    with keyboard_controller.pressed(Key.ctrl):
-                        keyboard_controller.press(pynput_key)
-                        keyboard_controller.release(pynput_key)
-                elif "shift" in modifiers:
-                    with keyboard_controller.pressed(Key.shift):
-                        keyboard_controller.press(pynput_key)
-                        keyboard_controller.release(pynput_key)
+        Args:
+            key: The key to simulate
+            action: The action to perform ('down', 'up', or 'press')
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if action == "press":
+                return self._press_key(key)
+            elif action == "down":
+                return self._key_down(key)
+            elif action == "up":
+                return self._key_up(key)
             else:
-                # No modifiers, just press the key
-                keyboard_controller.press(pynput_key)
-                keyboard_controller.release(pynput_key)
-
-            logger.info(f"✅ pynput key simulation: {'+'.join(modifiers + [key])}")
-            return True
-
+                logger.error(f"❌ Invalid key action: {action}")
+                return False
         except Exception as e:
-            logger.error(f"❌ pynput simulation failed: {e}")
+            logger.error(f"❌ Key action simulation failed: {e}")
             return False
+
+    def _key_down(self, key: str) -> bool:
+        """Press a key down (and hold)"""
+        try:
+            if self.current_os == "Windows" and WINDOWS_FALLBACK:
+                vk_code = self._get_windows_vk_code(key)
+                if vk_code:
+                    user32.keybd_event(vk_code, 0, 0, 0)  # Key down
+                    return True
+
+            if PYNPUT_AVAILABLE:
+                pynput_key = self._get_pynput_key(key)
+                keyboard_controller.press(pynput_key)
+                return True
+
+            return False
+        except Exception as e:
+            logger.error(f"❌ Key down failed: {e}")
+            return False
+
+    def _key_up(self, key: str) -> bool:
+        """Release a key"""
+        try:
+            if self.current_os == "Windows" and WINDOWS_FALLBACK:
+                vk_code = self._get_windows_vk_code(key)
+                if vk_code:
+                    user32.keybd_event(vk_code, 0, 2, 0)  # Key up
+                    return True
+
+            if PYNPUT_AVAILABLE:
+                pynput_key = self._get_pynput_key(key)
+                keyboard_controller.release(pynput_key)
+                return True
+
+            return False
+        except Exception as e:
+            logger.error(f"❌ Key up failed: {e}")
+            return False
+
+    def _get_windows_vk_code(self, key: str) -> Optional[int]:
+        """Get Windows virtual key code for a key"""
+        vk_codes = {
+            "ctrl": 0x11,
+            "shift": 0x10,
+            "alt": 0x12,
+            "cmd": 0x5B,  # Left Windows key
+            "enter": 0x0D,
+            "backspace": 0x08,
+            "space": 0x20,
+            "tab": 0x09,
+            "a": 0x41,
+            "b": 0x42,
+            "c": 0x43,
+            "d": 0x44,
+            "e": 0x45,
+            "f": 0x46,
+            "g": 0x47,
+            "h": 0x48,
+            "i": 0x49,
+            "j": 0x4A,
+            "k": 0x4B,
+            "l": 0x4C,
+            "m": 0x4D,
+            "n": 0x4E,
+            "o": 0x4F,
+            "p": 0x50,
+            "q": 0x51,
+            "r": 0x52,
+            "s": 0x53,
+            "t": 0x54,
+            "u": 0x55,
+            "v": 0x56,
+            "w": 0x57,
+            "x": 0x58,
+            "y": 0x59,
+            "z": 0x5A,
+        }
+        return vk_codes.get(key.lower())
 
     def _get_pynput_key(self, key_name: str):
         """Convert key name to pynput key object"""
@@ -500,30 +535,35 @@ class ButtonFactory:
         self.app = text_app_instance
         self.config = ButtonConfig()
         self.key_simulator = KeySimulator()
+        self._register_hooks()
+
+    def _register_hooks(self):
+        """Register hook functions for buttons that need them"""
+        # Register copy hook
+        self.key_simulator.register_hook("copy", self.app.copy_current_text)
+
+        # Register clear hook
+        self.key_simulator.register_hook("clear", self.app.clear_text)
+
+        # Register copy_paste hook
+        self.key_simulator.register_hook("copy_paste", self.app.copy_current_text)
+
+        # Register copy_paste_enter hook
+        self.key_simulator.register_hook("copy_paste_enter", self.app.copy_current_text)
 
     def create_button(self, button_config: Dict[str, Any]):
         """Create a UI button from configuration"""
         button_id = button_config.get("id")
         label = self.config.get_button_label(button_config)
-        style_class = button_config.get("style_class", "")
 
-        # Use simple classes that work well with dark mode
-        tailwind_classes = "flex-1 p-2 m-1"
-
-        if "copy-button" in style_class:
-            tailwind_classes += " bg-positive"
-        elif "clear-button" in style_class:
-            tailwind_classes += " bg-negative"
-        elif "voice-button" in style_class:
-            tailwind_classes += " bg-primary"
-        elif "upload-button" in style_class:
-            tailwind_classes += " bg-secondary"
-        else:
-            tailwind_classes += " bg-accent"
+        # Get classes from configuration, with fallback to default
+        tailwind_classes = self.config.get_button_classes(button_config)
 
         # Create button with appropriate callback
         callback = self._get_button_callback(button_config)
-        button = ui.button(label, on_click=callback).classes(tailwind_classes)
+        button = ui.button(label, on_click=callback, color=None).classes(
+            tailwind_classes
+        )
 
         logger.info(f"✅ Created button: {button_id} - {label}")
         return button
@@ -537,44 +577,76 @@ class ButtonFactory:
             return self.app.copy_current_text
         elif action == "clear_text":
             return self.app.clear_text
-        elif action == "simulate_key":
-            return lambda: self._handle_key_simulation(button_config)
-        elif action == "toggle_voice_recording":
-            return None  # Voice button has special handling
+        elif action == "copy_and_paste":
+            return lambda: self._handle_copy_and_paste(button_config)
+        elif action == "copy_paste_and_enter":
+            return lambda: self._handle_copy_paste_and_enter(button_config)
+        elif action == "simulate_key_sequence":
+            return lambda: self._handle_key_sequence(button_config)
         else:
             logger.warning(f"⚠️ Unknown action for button {button_id}: {action}")
             return lambda: self.app.show_status(
                 f"Action not implemented: {action}", "error"
             )
 
-    def _handle_key_simulation(self, button_config: Dict[str, Any]):
-        """Handle key simulation for a button"""
+    def _handle_key_sequence(self, button_config: Dict[str, Any]):
+        """Handle key sequence simulation for a button"""
         button_id = button_config.get("id")
-        key_config = self.config.get_key_combination(button_config)
+        key_sequence = self.config.get_key_sequence(button_config)
 
-        if not key_config:
-            logger.error(f"❌ No key configuration for button {button_id}")
-            self.app.show_status(f"No key configuration for {button_id}", "error")
+        if not key_sequence:
+            logger.error(f"❌ No key sequence for button {button_id}")
+            self.app.show_status(f"No key sequence for {button_id}", "error")
             return
 
-        logger.info(f"🎹 Simulating key combination for {button_id}")
+        logger.info(f"🎹 Simulating key sequence for {button_id}")
 
-        if self.key_simulator.simulate_key_combination(key_config):
-            self.app.show_status(
-                f"{button_config.get('description', button_id)} executed!", "success"
-            )
+        # Execute hooks before key simulation
+        if not self.key_simulator.execute_hooks(button_id):
+            logger.info(f"🔗 Hook prevented key simulation for {button_id}")
+            return
+
+        if self.key_simulator.simulate_key_sequence(key_sequence):
+            self.app.show_status(f"{button_id} executed!", "success")
         else:
             self.app.show_status(f"Failed to execute {button_id}", "error")
 
-    def get_buttons_for_group(self, group: str) -> List:
-        """Get all UI buttons for a specific group"""
+    def _handle_copy_and_paste(self, button_config: Dict[str, Any]):
+        """Handle copy and paste action"""
+        button_id = button_config.get("id")
+
+        # Execute hook (copy text)
+        if not self.key_simulator.execute_hooks(button_id):
+            return
+
+        # Simulate paste key sequence
+        key_sequence = self.config.get_key_sequence(button_config)
+        if key_sequence and self.key_simulator.simulate_key_sequence(key_sequence):
+            self.app.show_status("Text copied and pasted!", "success")
+        else:
+            self.app.show_status("Failed to copy and paste", "error")
+
+    def _handle_copy_paste_and_enter(self, button_config: Dict[str, Any]):
+        """Handle copy, paste and enter action"""
+        button_id = button_config.get("id")
+
+        # Execute hook (copy text)
+        if not self.key_simulator.execute_hooks(button_id):
+            return
+
+        # Simulate paste and enter key sequence
+        key_sequence = self.config.get_key_sequence(button_config)
+        if key_sequence and self.key_simulator.simulate_key_sequence(key_sequence):
+            self.app.show_status("Text copied, pasted and entered!", "success")
+        else:
+            self.app.show_status("Failed to copy, paste and enter", "error")
+
+    def get_all_buttons(self) -> List:
+        """Get all UI buttons from configuration"""
         buttons = []
-        button_configs = self.config.get_buttons_by_group(group)
+        button_configs = self.config.get_all_buttons()
 
         for button_config in button_configs:
-            if button_config.get("unique_logic"):
-                # Skip buttons with unique logic (like voice recording)
-                continue
             buttons.append(self.create_button(button_config))
 
         return buttons
@@ -607,19 +679,6 @@ class TextInputApp:
             logger.info("🎤 Voice-to-text functionality enabled")
         else:
             logger.warning("⚠️ Voice-to-text functionality disabled")
-
-    def get_local_ip(self):
-        """Get the local IP address of the server"""
-        try:
-            # Create a socket to get local IP
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-            logger.info(f"🌐 Local IP address detected: {local_ip}")
-            return local_ip
-        except Exception as e:
-            logger.error(f"❌ Failed to get local IP: {e}")
-            return "localhost"
 
     def copy_to_clipboard(self, text):
         """Copy text to system clipboard"""
@@ -696,322 +755,6 @@ class TextInputApp:
         except Exception as e:
             logger.error(f"❌ Failed to simulate paste: {e}")
             return False
-
-    def simulate_accept(self):
-        """Simulate Accept key combination (Cmd+Enter on macOS, Ctrl+Enter on Windows/Linux)"""
-        if not KEYBOARD_AVAILABLE:
-            logger.error(
-                "❌ Keyboard simulation not available - cannot simulate Accept"
-            )
-            return False
-
-        try:
-            if IS_MACOS:
-                # macOS: Use Cmd+Enter
-                logger.info("🍎 Simulating Cmd+Enter (Accept) on macOS")
-                if PYNPUT_AVAILABLE:
-                    with keyboard_controller.pressed(Key.cmd):
-                        keyboard_controller.press(Key.enter)
-                        keyboard_controller.release(Key.enter)
-                    logger.info(
-                        "✅ Cmd+Enter (Accept) operation completed successfully"
-                    )
-                    return True
-                else:
-                    logger.error("❌ pynput not available for macOS Accept simulation")
-                    return False
-
-            elif CURRENT_OS == "Windows":
-                # Windows: Try native method first
-                logger.info("🪟 Simulating Ctrl+Enter (Accept) on Windows")
-                if WINDOWS_FALLBACK:
-                    logger.info("🔧 Using Windows native Accept simulation")
-                    # Windows VK codes: Ctrl = 0x11, Enter = 0x0D
-                    user32.keybd_event(0x11, 0, 0, 0)  # Ctrl down
-                    user32.keybd_event(0x0D, 0, 0, 0)  # Enter down
-                    user32.keybd_event(0x0D, 0, 2, 0)  # Enter up
-                    user32.keybd_event(0x11, 0, 2, 0)  # Ctrl up
-                    logger.info(
-                        "✅ Windows native Ctrl+Enter (Accept) operation completed successfully"
-                    )
-                    return True
-
-                # Fallback to pynput
-                elif PYNPUT_AVAILABLE:
-                    logger.info("🔧 Using pynput for Windows Accept simulation")
-                    with keyboard_controller.pressed(Key.ctrl):
-                        keyboard_controller.press(Key.enter)
-                        keyboard_controller.release(Key.enter)
-                    logger.info(
-                        "✅ pynput Ctrl+Enter (Accept) operation completed successfully"
-                    )
-                    return True
-
-            else:
-                # Linux and other systems: Use Ctrl+Enter
-                logger.info(f"🐧 Simulating Ctrl+Enter (Accept) on {CURRENT_OS}")
-                if PYNPUT_AVAILABLE:
-                    with keyboard_controller.pressed(Key.ctrl):
-                        keyboard_controller.press(Key.enter)
-                        keyboard_controller.release(Key.enter)
-                    logger.info(
-                        "✅ Ctrl+Enter (Accept) operation completed successfully"
-                    )
-                    return True
-                else:
-                    logger.error("❌ pynput not available for Accept simulation")
-                    return False
-
-        except Exception as e:
-            logger.error(f"❌ Failed to simulate Accept: {e}")
-            return False
-
-    def simulate_reject(self):
-        """Simulate Reject key combination (Cmd+Backspace on macOS, Ctrl+Backspace on Windows/Linux)"""
-        if not KEYBOARD_AVAILABLE:
-            logger.error(
-                "❌ Keyboard simulation not available - cannot simulate Reject"
-            )
-            return False
-
-        try:
-            if IS_MACOS:
-                # macOS: Use Cmd+Backspace
-                logger.info("🍎 Simulating Cmd+Backspace (Reject) on macOS")
-                if PYNPUT_AVAILABLE:
-                    with keyboard_controller.pressed(Key.cmd):
-                        keyboard_controller.press(Key.backspace)
-                        keyboard_controller.release(Key.backspace)
-                    logger.info(
-                        "✅ Cmd+Backspace (Reject) operation completed successfully"
-                    )
-                    return True
-                else:
-                    logger.error("❌ pynput not available for macOS Reject simulation")
-                    return False
-
-            elif CURRENT_OS == "Windows":
-                # Windows: Try native method first
-                logger.info("🪟 Simulating Ctrl+Backspace (Reject) on Windows")
-                if WINDOWS_FALLBACK:
-                    logger.info("🔧 Using Windows native Reject simulation")
-                    # Windows VK codes: Ctrl = 0x11, Backspace = 0x08
-                    user32.keybd_event(0x11, 0, 0, 0)  # Ctrl down
-                    user32.keybd_event(0x08, 0, 0, 0)  # Backspace down
-                    user32.keybd_event(0x08, 0, 2, 0)  # Backspace up
-                    user32.keybd_event(0x11, 0, 2, 0)  # Ctrl up
-                    logger.info(
-                        "✅ Windows native Ctrl+Backspace (Reject) operation completed successfully"
-                    )
-                    return True
-
-                # Fallback to pynput
-                elif PYNPUT_AVAILABLE:
-                    logger.info("🔧 Using pynput for Windows Reject simulation")
-                    with keyboard_controller.pressed(Key.ctrl):
-                        keyboard_controller.press(Key.backspace)
-                        keyboard_controller.release(Key.backspace)
-                    logger.info(
-                        "✅ pynput Ctrl+Backspace (Reject) operation completed successfully"
-                    )
-                    return True
-
-            else:
-                # Linux and other systems: Use Ctrl+Backspace
-                logger.info(f"🐧 Simulating Ctrl+Backspace (Reject) on {CURRENT_OS}")
-                if PYNPUT_AVAILABLE:
-                    with keyboard_controller.pressed(Key.ctrl):
-                        keyboard_controller.press(Key.backspace)
-                        keyboard_controller.release(Key.backspace)
-                    logger.info(
-                        "✅ Ctrl+Backspace (Reject) operation completed successfully"
-                    )
-                    return True
-                else:
-                    logger.error("❌ pynput not available for Reject simulation")
-                    return False
-
-        except Exception as e:
-            logger.error(f"❌ Failed to simulate Reject: {e}")
-            return False
-
-    def simulate_new(self):
-        """Simulate New key combination (Cmd+N on macOS, Ctrl+N on Windows/Linux)"""
-        if not KEYBOARD_AVAILABLE:
-            logger.error("❌ Keyboard simulation not available - cannot simulate New")
-            return False
-
-        try:
-            if IS_MACOS:
-                # macOS: Use Cmd+N
-                logger.info("🍎 Simulating Cmd+N (New) on macOS")
-                if PYNPUT_AVAILABLE:
-                    with keyboard_controller.pressed(Key.cmd):
-                        keyboard_controller.press("n")
-                        keyboard_controller.release("n")
-                    logger.info("✅ Cmd+N (New) operation completed successfully")
-                    return True
-                else:
-                    logger.error("❌ pynput not available for macOS New simulation")
-                    return False
-
-            elif CURRENT_OS == "Windows":
-                # Windows: Try native method first
-                logger.info("🪟 Simulating Ctrl+N (New) on Windows")
-                if WINDOWS_FALLBACK:
-                    logger.info("🔧 Using Windows native New simulation")
-                    # Windows VK codes: Ctrl = 0x11, N = 0x4E
-                    user32.keybd_event(0x11, 0, 0, 0)  # Ctrl down
-                    user32.keybd_event(0x4E, 0, 0, 0)  # N down
-                    user32.keybd_event(0x4E, 0, 2, 0)  # N up
-                    user32.keybd_event(0x11, 0, 2, 0)  # Ctrl up
-                    logger.info(
-                        "✅ Windows native Ctrl+N (New) operation completed successfully"
-                    )
-                    return True
-
-                # Fallback to pynput
-                elif PYNPUT_AVAILABLE:
-                    logger.info("🔧 Using pynput for Windows New simulation")
-                    with keyboard_controller.pressed(Key.ctrl):
-                        keyboard_controller.press("n")
-                        keyboard_controller.release("n")
-                    logger.info(
-                        "✅ pynput Ctrl+N (New) operation completed successfully"
-                    )
-                    return True
-
-            else:
-                # Linux and other systems: Use Ctrl+N
-                logger.info(f"🐧 Simulating Ctrl+N (New) on {CURRENT_OS}")
-                if PYNPUT_AVAILABLE:
-                    with keyboard_controller.pressed(Key.ctrl):
-                        keyboard_controller.press("n")
-                        keyboard_controller.release("n")
-                    logger.info("✅ Ctrl+N (New) operation completed successfully")
-                    return True
-                else:
-                    logger.error("❌ pynput not available for New simulation")
-                    return False
-
-        except Exception as e:
-            logger.error(f"❌ Failed to simulate New: {e}")
-            return False
-
-    def simulate_stop(self):
-        """Simulate Stop key combination (Cmd+Shift+Backspace on macOS, Ctrl+Shift+Backspace on Windows/Linux)"""
-        if not KEYBOARD_AVAILABLE:
-            logger.error("❌ Keyboard simulation not available - cannot simulate Stop")
-            return False
-
-        try:
-            if IS_MACOS:
-                # macOS: Use Cmd+Shift+Backspace
-                logger.info("🍎 Simulating Cmd+Shift+Backspace (Stop) on macOS")
-                if PYNPUT_AVAILABLE:
-                    with keyboard_controller.pressed(Key.cmd):
-                        with keyboard_controller.pressed(Key.shift):
-                            keyboard_controller.press(Key.backspace)
-                            keyboard_controller.release(Key.backspace)
-                    logger.info(
-                        "✅ Cmd+Shift+Backspace (Stop) operation completed successfully"
-                    )
-                    return True
-                else:
-                    logger.error("❌ pynput not available for macOS Stop simulation")
-                    return False
-
-            elif CURRENT_OS == "Windows":
-                # Windows: Try native method first
-                logger.info("🪟 Simulating Ctrl+Shift+Backspace (Stop) on Windows")
-                if WINDOWS_FALLBACK:
-                    logger.info("🔧 Using Windows native Stop simulation")
-                    # Windows VK codes: Ctrl = 0x11, Shift = 0x10, Backspace = 0x08
-                    user32.keybd_event(0x11, 0, 0, 0)  # Ctrl down
-                    user32.keybd_event(0x10, 0, 0, 0)  # Shift down
-                    user32.keybd_event(0x08, 0, 0, 0)  # Backspace down
-                    user32.keybd_event(0x08, 0, 2, 0)  # Backspace up
-                    user32.keybd_event(0x10, 0, 2, 0)  # Shift up
-                    user32.keybd_event(0x11, 0, 2, 0)  # Ctrl up
-                    logger.info(
-                        "✅ Windows native Ctrl+Shift+Backspace (Stop) operation completed successfully"
-                    )
-                    return True
-
-                # Fallback to pynput
-                elif PYNPUT_AVAILABLE:
-                    logger.info("🔧 Using pynput for Windows Stop simulation")
-                    with keyboard_controller.pressed(Key.ctrl):
-                        with keyboard_controller.pressed(Key.shift):
-                            keyboard_controller.press(Key.backspace)
-                            keyboard_controller.release(Key.backspace)
-                    logger.info(
-                        "✅ pynput Ctrl+Shift+Backspace (Stop) operation completed successfully"
-                    )
-                    return True
-
-            else:
-                # Linux and other systems: Use Ctrl+Shift+Backspace
-                logger.info(
-                    f"🐧 Simulating Ctrl+Shift+Backspace (Stop) on {CURRENT_OS}"
-                )
-                if PYNPUT_AVAILABLE:
-                    with keyboard_controller.pressed(Key.ctrl):
-                        with keyboard_controller.pressed(Key.shift):
-                            keyboard_controller.press(Key.backspace)
-                            keyboard_controller.release(Key.backspace)
-                    logger.info(
-                        "✅ Ctrl+Shift+Backspace (Stop) operation completed successfully"
-                    )
-                    return True
-                else:
-                    logger.error("❌ pynput not available for Stop simulation")
-                    return False
-
-        except Exception as e:
-            logger.error(f"❌ Failed to simulate Stop: {e}")
-            return False
-
-    def auto_paste_text(self, text):
-        """Auto-paste text by copying to clipboard then simulating paste"""
-        if text.strip():
-            logger.info(
-                f"🚀 Starting auto-paste operation for text: '{text[:50]}{'...' if len(text) > 50 else ''}'"
-            )
-
-            # First copy to clipboard
-            if self.copy_to_clipboard(text):
-                # Small delay to ensure clipboard is updated
-                time.sleep(0.1)
-
-                # Then simulate paste
-                if self.simulate_paste():
-                    # Add to history
-                    self.add_to_history(text)
-                    self.update_history_display()
-
-                    # Press Enter if option is enabled
-                    if (
-                        hasattr(self, "press_enter_toggle")
-                        and self.press_enter_toggle.value
-                    ):
-                        logger.info("⏎ Auto-Enter enabled - pressing Enter after paste")
-                        time.sleep(0.1)  # Small delay between paste and enter
-                        # Use the new key simulation system
-                        key_config = {"keys": ["enter"]}
-                        self.button_factory.key_simulator.simulate_key_combination(
-                            key_config
-                        )
-
-                    logger.info("✅ Auto-paste operation completed successfully")
-                    return True
-                else:
-                    logger.error("❌ Auto-paste failed at paste simulation step")
-            else:
-                logger.error("❌ Auto-paste failed at clipboard copy step")
-
-        logger.warning("⚠️ Auto-paste operation failed or no text provided")
-        return False
 
     def add_to_history(self, text):
         """Add text to history with timestamp"""
@@ -1162,33 +905,12 @@ class TextInputApp:
                         "Start Recording", on_click=self.toggle_voice_recording
                     ).classes("flex-1 p-2 m-1 bg-primary")
 
-            # Main action buttons (from configuration)
+            # All buttons from configuration (unified system)
             with ui.row().classes("w-full"):
-                main_buttons = self.button_factory.get_buttons_for_group("main")
-                for button in main_buttons:
+                all_buttons = self.button_factory.get_all_buttons()
+                for button in all_buttons:
                     # Buttons are already created by the factory
                     pass
-
-            # Extended keyboard shortcuts row (from configuration)
-            with ui.row().classes("w-full border"):
-                extended_buttons = self.button_factory.get_buttons_for_group("extended")
-                for button in extended_buttons:
-                    # Buttons are already created by the factory
-                    pass
-
-            # Settings section - group toggles together
-            with ui.column().classes("w-full border"):
-                ui.label("Settings")
-                with ui.column():
-                    paste_key = "Cmd+V" if IS_MACOS else "Ctrl+V"
-                    self.auto_paste_toggle = ui.checkbox(
-                        f"Auto-paste when copying to clipboard ({paste_key})",
-                        value=True,
-                    )
-
-                    self.press_enter_toggle = ui.checkbox(
-                        "Press Enter after pasting", value=True
-                    )
 
             # Status section - group all status info together
             with ui.column().classes("w-full p-2 my-2"):
@@ -1347,11 +1069,12 @@ class TextInputApp:
 
         # Footer
         with ui.column().classes("w-full p-2 mt-4"):
-            paste_key = "Cmd+V" if IS_MACOS else "Ctrl+V"
             ui.label(
                 "Tap text area to start typing • Text syncs across all devices and tabs"
             )
-            ui.label(f"Copy to clipboard • Auto-paste with {paste_key} on server")
+            ui.label(
+                "Use the buttons above to copy, paste, and send keyboard shortcuts to server"
+            )
 
         # Text area is bound directly to storage, so changes are automatic
         # Update history display on startup
@@ -1380,57 +1103,30 @@ class TextInputApp:
             logger.info("🗑️ Clearing text area after successful copy")
             app.storage.general[self.storage_key] = ""
 
-            # Auto-paste if enabled
-            if self.auto_paste_toggle.value:
-                logger.info("🔄 Auto-paste enabled, initiating paste sequence")
-                # Small delay to ensure clipboard is updated
-                time.sleep(0.1)
-
-                # Simulate paste
-                if self.simulate_paste():
-                    # Press Enter if option is enabled
-                    if (
-                        hasattr(self, "press_enter_toggle")
-                        and self.press_enter_toggle.value
-                    ):
-                        logger.info("⏎ Auto-Enter enabled, pressing Enter after paste")
-                        time.sleep(0.1)  # Small delay between paste and enter
-                        # Use the new key simulation system
-                        key_config = {"keys": ["enter"]}
-                        self.button_factory.key_simulator.simulate_key_combination(
-                            key_config
-                        )
-
-                    logger.info(
-                        "✅ Copy and auto-paste operation completed successfully"
-                    )
-                    self.show_status("Text copied and pasted!", "success")
-                else:
-                    logger.error("❌ Copy succeeded but auto-paste failed")
-                    self.show_status("Text copied, but paste failed", "error")
-            else:
-                logger.info("✅ Copy operation completed successfully")
-                self.show_status("Text copied to clipboard!", "success")
+            logger.info("✅ Copy operation completed successfully")
+            self.show_status("Text copied to clipboard!", "success")
         else:
             logger.error("❌ Copy operation failed")
             self.show_status("Failed to copy text", "error")
 
-    def copy_to_clipboard_silent(self, text):
-        """Copy text to clipboard without showing status"""
-        if text and self.copy_to_clipboard(text):
-            self.add_to_history(text)
-            self.update_history_display()
-
     def paste_from_history(self, text):
-        """Paste text from history using Ctrl+V simulation"""
-        if self.auto_paste_text(text):
-            self.show_status("Text pasted from history!", "success")
+        """Paste text from history by copying to clipboard then simulating paste"""
+        if self.copy_to_clipboard(text):
+            # Small delay to ensure clipboard is updated
+            time.sleep(0.1)
+
+            # Then simulate paste
+            if self.simulate_paste():
+                self.add_to_history(text)
+                self.update_history_display()
+                self.show_status("Text pasted from history!", "success")
+            else:
+                self.show_status("Failed to paste text", "error")
         else:
-            self.show_status("Failed to paste text", "error")
+            self.show_status("Failed to copy text to clipboard", "error")
 
     def clear_text(self):
         """Clear the text area"""
-        logger.info("🗑️ Clearing text area")
         app.storage.general[self.storage_key] = ""
 
         logger.info("✅ Text cleared successfully")
@@ -1490,87 +1186,6 @@ class TextInputApp:
                                     "text"
                                 ]: self.paste_from_history(text),
                             ).classes("p-1 m-1 bg-positive")
-
-    async def handle_audio_upload(self, event):
-        """Handle audio file upload and transcription"""
-        if not self.voice_enabled:
-            self.show_status("Voice-to-text is not available", "error")
-            return
-
-        if not event.content:
-            self.show_status("No audio file selected", "error")
-            return
-
-        try:
-            # Show processing status
-            self.show_status("Processing audio file...", "info")
-            logger.info(f"🎤 Processing uploaded audio file: {event.name}")
-
-            # Save uploaded file temporarily
-            with tempfile.NamedTemporaryFile(
-                delete=False, suffix=Path(event.name).suffix
-            ) as temp_file:
-                # Fix: Read content from SpooledTemporaryFile properly
-                if hasattr(event.content, "read"):
-                    # If it's a file-like object, read its content
-                    event.content.seek(0)  # Ensure we're at the beginning
-                    audio_data = event.content.read()
-                else:
-                    # If it's already bytes
-                    audio_data = event.content
-
-                temp_file.write(audio_data)
-                temp_file_path = temp_file.name
-
-            # Transcribe the audio
-            result = await asyncio.to_thread(
-                self.voice_processor.transcribe_audio, temp_file_path
-            )
-
-            # Clean up temp file
-            try:
-                os.unlink(temp_file_path)
-            except OSError:
-                pass
-
-            if result["success"]:
-                transcribed_text = result["text"]
-                processing_time = result.get("processing_time", 0)
-                language = result.get("language", "unknown")
-
-                if transcribed_text:
-                    # Add transcribed text to storage (UI will update automatically)
-                    current_text = app.storage.general.get(self.storage_key, "")
-                    if current_text:
-                        app.storage.general[self.storage_key] = (
-                            current_text + "\n" + transcribed_text
-                        )
-                    else:
-                        app.storage.general[self.storage_key] = transcribed_text
-
-                    # Add to history
-                    self.add_to_history(transcribed_text)
-                    self.update_history_display()
-
-                    # Show success status
-                    self.show_status(
-                        f"Transcribed in {processing_time:.1f}s (Language: {language})",
-                        "success",
-                    )
-                    logger.info(
-                        f"✅ Audio transcription successful: {len(transcribed_text)} characters"
-                    )
-                else:
-                    self.show_status("No speech detected in audio", "error")
-                    logger.warning("⚠️ No speech detected in uploaded audio")
-            else:
-                error_msg = result.get("error", "Unknown error")
-                self.show_status(f"Transcription failed: {error_msg}", "error")
-                logger.error(f"❌ Audio transcription failed: {error_msg}")
-
-        except Exception as e:
-            self.show_status(f"Error processing audio: {str(e)}", "error")
-            logger.error(f"❌ Audio processing error: {e}")
 
     async def process_audio_data(self, audio_data):
         """Process raw audio data without UI updates (for API calls)"""
@@ -1637,50 +1252,6 @@ class TextInputApp:
         except Exception as e:
             logger.error(f"❌ Push-to-talk audio processing error: {e}")
             return {"success": False, "error": str(e)}
-
-    async def handle_audio_data(self, audio_data):
-        """Handle raw audio data from push-to-talk recording (with UI updates)"""
-        if not self.voice_enabled:
-            self.show_status("Voice-to-text is not available", "error")
-            return
-
-        try:
-            # Show processing status
-            self.show_status("Processing recorded audio...", "info")
-
-            # Process audio data
-            result = await self.process_audio_data(audio_data)
-
-            if result["success"]:
-                transcribed_text = result["text"]
-                processing_time = result.get("processing_time", 0)
-                language = result.get("language", "unknown")
-
-                # Add transcribed text to storage (UI will update automatically)
-                current_text = app.storage.general.get(self.storage_key, "")
-                if current_text:
-                    app.storage.general[self.storage_key] = (
-                        current_text + "\n" + transcribed_text
-                    )
-                else:
-                    app.storage.general[self.storage_key] = transcribed_text
-
-                # Add to history
-                self.add_to_history(transcribed_text)
-                self.update_history_display()
-
-                # Show success status
-                self.show_status(
-                    f"Transcribed in {processing_time:.1f}s (Language: {language})",
-                    "success",
-                )
-            else:
-                error_msg = result.get("error", "Unknown error")
-                self.show_status(f"Transcription failed: {error_msg}", "error")
-
-        except Exception as e:
-            self.show_status(f"Error processing recorded audio: {str(e)}", "error")
-            logger.error(f"❌ Push-to-talk audio processing error: {e}")
 
     def toggle_voice_recording(self):
         """Toggle voice recording state and trigger JavaScript recording"""
@@ -2104,66 +1675,6 @@ class TextInputApp:
             logger.error(f"❌ Unexpected error during window activation: {e}")
             return False
 
-    def test_applescript_debug(self):
-        """Test AppleScript execution for debugging"""
-        logger.info("🔧 DEBUG: Testing AppleScript execution...")
-        logger.info(
-            "🔧 DEBUG: Note - If this fails, you may need to grant Terminal/Python accessibility permissions"
-        )
-        logger.info(
-            "🔧 DEBUG: Go to System Preferences > Security & Privacy > Privacy > Accessibility"
-        )
-        logger.info("🔧 DEBUG: Add Terminal or Python to the list of allowed apps")
-
-        # Test 1: Very simple script
-        test_script = """
-        tell application "System Events"
-            return "AppleScript is working"
-        end tell
-        """
-
-        try:
-            result = subprocess.run(
-                ["osascript", "-e", test_script],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            logger.info(f"🔧 DEBUG: Simple test result: '{result.stdout}'")
-        except Exception as e:
-            logger.error(f"🔧 DEBUG: Simple test failed: {e}")
-            return
-
-        # Test 2: Check if Cursor process exists
-        cursor_test_script = """
-        tell application "System Events"
-            set appList to name of every application process
-            return appList as string
-        end tell
-        """
-
-        try:
-            result = subprocess.run(
-                ["osascript", "-e", cursor_test_script],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            logger.info(f"🔧 DEBUG: Running apps: '{result.stdout}'")
-            if "Cursor" in result.stdout:
-                logger.info("🔧 DEBUG: ✅ Cursor process found in running apps")
-            else:
-                logger.warning("🔧 DEBUG: ⚠️ Cursor process NOT found in running apps")
-        except Exception as e:
-            logger.error(f"🔧 DEBUG: App list test failed: {e}")
-
-        # Test 3: Try to get Cursor windows
-        logger.info("🔧 DEBUG: Testing Cursor window detection...")
-        instances = self.get_cursor_instances_macos()
-        logger.info(f"🔧 DEBUG: Final result: {len(instances)} instances found")
-        for instance in instances:
-            logger.info(f"🔧 DEBUG: Instance: {instance}")
-
     def refresh_cursor_instances(self):
         """Refresh the list of Cursor instances"""
         logger.info("🔄 Refreshing Cursor instances...")
@@ -2218,19 +1729,6 @@ def main():
 
     # Create the UI
     text_app.create_ui()
-
-    # Get local IP for display
-    local_ip = text_app.get_local_ip()
-
-    print("Starting Mobile Text Input Server...")
-    print("✅ Cross-device synchronization enabled")
-    print("Local access: http://localhost:8080")
-    print(f"Network access: http://{local_ip}:8080")
-    print(
-        f"Mobile access: Connect your mobile device to the same network and visit http://{local_ip}:8080"
-    )
-    print("📱 Text syncs across all devices and browser tabs")
-    print("Press Ctrl+C to stop the server")
 
     # Run the application
     ui.run(
