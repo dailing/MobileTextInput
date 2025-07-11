@@ -7,7 +7,6 @@ Uses only standard Python library for maximum compatibility
 import sys
 import subprocess
 import platform
-import os
 from pathlib import Path
 
 
@@ -21,12 +20,7 @@ def run_command(command, cwd=None, check=True):
     """Run a command and return the result"""
     try:
         result = subprocess.run(
-            command, 
-            shell=True, 
-            cwd=cwd, 
-            capture_output=True, 
-            text=True, 
-            check=check
+            command, shell=True, cwd=cwd, capture_output=True, text=True, check=check
         )
         return result.returncode == 0, result.stdout, result.stderr
     except subprocess.CalledProcessError as e:
@@ -37,7 +31,7 @@ def check_python_version():
     """Check if Python version is compatible"""
     version = sys.version_info
     if version.major < 3 or (version.major == 3 and version.minor < 8):
-        print(f"Error: Python 3.8+ required, found {version.major}.{version.minor}")
+        print(f"Error: Python 3.8+ required, " f"found {version.major}.{version.minor}")
         return False
     print(f"Python {version.major}.{version.minor}.{version.micro} - OK")
     return True
@@ -46,14 +40,14 @@ def check_python_version():
 def create_virtual_environment():
     """Create virtual environment if it doesn't exist"""
     venv_path = get_venv_path()
-    
+
     if venv_path.exists():
         print(f"Virtual environment already exists at {venv_path}")
         return True
-    
+
     print(f"Creating virtual environment at {venv_path}...")
     success, stdout, stderr = run_command(f"{sys.executable} -m venv {venv_path}")
-    
+
     if success:
         print("Virtual environment created successfully")
         return True
@@ -66,7 +60,7 @@ def get_venv_python():
     """Get the path to Python executable in virtual environment"""
     system = platform.system().lower()
     venv_path = get_venv_path()
-    
+
     if system == "windows":
         return venv_path / "Scripts" / "python.exe"
     else:
@@ -77,7 +71,7 @@ def get_venv_pip():
     """Get the path to pip executable in virtual environment"""
     system = platform.system().lower()
     venv_path = get_venv_path()
-    
+
     if system == "windows":
         return venv_path / "Scripts" / "pip.exe"
     else:
@@ -87,18 +81,25 @@ def get_venv_pip():
 def install_requirements():
     """Install requirements in virtual environment"""
     pip_path = get_venv_pip()
-    
+
     if not pip_path.exists():
         print(f"Error: pip not found at {pip_path}")
         return False
-    
+
     # First try to upgrade pip using the USTC mirror
     print("Upgrading pip...")
-    run_command(f'"{pip_path}" install --upgrade pip -i https://mirrors.ustc.edu.cn/pypi/simple', check=False)
-    
+    run_command(
+        f'"{pip_path}" install --upgrade pip '
+        f"-i https://mirrors.ustc.edu.cn/pypi/simple",
+        check=False,
+    )
+
     print("Installing requirements...")
-    success, stdout, stderr = run_command(f'"{pip_path}" install -r requirements.txt -i https://mirrors.ustc.edu.cn/pypi/simple')
-    
+    success, stdout, stderr = run_command(
+        f'"{pip_path}" install -r requirements.txt '
+        f"-i https://mirrors.ustc.edu.cn/pypi/simple"
+    )
+
     if success:
         print("Requirements installed successfully")
         return True
@@ -106,8 +107,10 @@ def install_requirements():
         print(f"Failed to install requirements with USTC mirror: {stderr}")
         print("Trying with default PyPI...")
         # Fallback to default PyPI if USTC mirror fails
-        success, stdout, stderr = run_command(f'"{pip_path}" install -r requirements.txt')
-        
+        success, stdout, stderr = run_command(
+            f'"{pip_path}" install -r requirements.txt'
+        )
+
         if success:
             print("Requirements installed successfully using default PyPI")
             return True
@@ -119,87 +122,166 @@ def install_requirements():
 def check_requirements_installed():
     """Check if requirements are already installed"""
     pip_path = get_venv_pip()
-    
+
     if not pip_path.exists():
         return False
-    
+
     success, stdout, stderr = run_command(f'"{pip_path}" list', check=False)
-    
+
     if not success:
         return False
-    
+
     # Check for core required packages
-    core_packages = ['nicegui', 'pyperclip', 'pynput']
+    core_packages = ["nicegui", "pyperclip", "pynput"]
     installed_packages = stdout.lower()
-    
+
     for package in core_packages:
         if package not in installed_packages:
             return False
-    
+
     return True
 
 
 def check_voice_requirements():
     """Check if voice-to-text requirements are installed"""
     pip_path = get_venv_pip()
-    
+
     if not pip_path.exists():
         return False, []
-    
+
     success, stdout, stderr = run_command(f'"{pip_path}" list', check=False)
-    
+
     if not success:
         return False, []
-    
+
     # Check for voice packages
-    voice_packages = ['openai-whisper', 'librosa', 'soundfile', 'pydub']
+    voice_packages = ["openai-whisper", "librosa", "soundfile", "pydub"]
     installed_packages = stdout.lower()
-    
+
     missing_packages = []
     for package in voice_packages:
         # Handle package name variations
-        package_check = package.replace('-', '_')  # openai-whisper -> openai_whisper
-        if package not in installed_packages and package_check not in installed_packages:
+        # openai-whisper -> openai_whisper
+        package_check = package.replace("-", "_")
+        if (
+            package not in installed_packages
+            and package_check not in installed_packages
+        ):
             missing_packages.append(package)
-    
+
     return len(missing_packages) == 0, missing_packages
+
+
+def check_gpu_support():
+    """Check if GPU support is available"""
+    pip_path = get_venv_pip()
+
+    if not pip_path.exists():
+        return False, "pip not found"
+
+    success, stdout, stderr = run_command(f'"{pip_path}" list', check=False)
+
+    if not success:
+        return False, "Failed to list packages"
+
+    # Check if torch is installed
+    if "torch" not in stdout.lower():
+        return False, "PyTorch not installed"
+
+    # Test GPU availability
+    python_path = get_venv_python()
+    gpu_test_script = """
+import torch
+print(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"CUDA device count: {torch.cuda.device_count()}")
+    print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+"""
+
+    try:
+        success, stdout, stderr = run_command(
+            f'"{python_path}" -c "{gpu_test_script}"', check=False
+        )
+
+        if success and "CUDA available: True" in stdout:
+            return True, stdout.strip()
+        else:
+            return False, f"CUDA not available: {stderr}"
+    except Exception as e:
+        return False, f"Error checking GPU: {e}"
+
+
+def install_torch_with_cuda():
+    """Install PyTorch with CUDA support on Windows"""
+    if platform.system().lower() != "windows":
+        print("CUDA installation is only supported on Windows")
+        return False
+
+    pip_path = get_venv_pip()
+
+    if not pip_path.exists():
+        print(f"Error: pip not found at {pip_path}")
+        return False
+
+    print("Installing PyTorch with CUDA support...")
+
+    # Install torch with CUDA support
+    cuda_command = (
+        f'"{pip_path}" install torch torchvision torchaudio '
+        f"--index-url https://download.pytorch.org/whl/cu126"
+    )
+
+    success, stdout, stderr = run_command(cuda_command, check=False)
+
+    if success:
+        print("✅ PyTorch with CUDA installed successfully")
+        return True
+    else:
+        print(f"❌ Failed to install PyTorch with CUDA: {stderr}")
+        return False
 
 
 def check_ffmpeg():
     """Check if FFmpeg is available"""
     try:
-        success, stdout, stderr = run_command('ffmpeg -version', check=False)
+        success, stdout, stderr = run_command("ffmpeg -version", check=False)
         return success
-    except:
+    except Exception:
         return False
 
 
 def run_application():
     """Run the main application"""
     python_path = get_venv_python()
-    
+
     if not python_path.exists():
         print(f"Error: Python not found at {python_path}")
         return False
-    
+
     if not Path("main.py").exists():
         print("Error: main.py not found")
         return False
-    
+
     # Check voice functionality status
     voice_available, missing_voice = check_voice_requirements()
     ffmpeg_available = check_ffmpeg()
-    
+    gpu_available, gpu_info = check_gpu_support()
+
     print("Starting application...")
     print("=" * 60)
     print("Mobile Text Input Web Application")
     print("Access from your mobile device using your computer's IP address")
     print("")
-    
+
     # Show feature status
     print("📱 Core Features: ✅ Available")
     if voice_available and ffmpeg_available:
         print("🎤 Voice-to-Text: ✅ Available")
+        if gpu_available:
+            print("🚀 GPU Acceleration: ✅ Available")
+            print(f"   {gpu_info}")
+        else:
+            print("💻 GPU Acceleration: ❌ CPU Only")
     elif voice_available and not ffmpeg_available:
         print("🎤 Voice-to-Text: ⚠️ Partially Available (FFmpeg missing)")
         print("   Install FFmpeg for full voice functionality")
@@ -209,11 +291,11 @@ def run_application():
     else:
         print("🎤 Voice-to-Text: ❌ Not Available")
         print("   Install voice packages and FFmpeg for voice functionality")
-    
+
     print("")
     print("Press Ctrl+C to stop the server")
     print("=" * 60)
-    
+
     # Run the application (this will block until stopped)
     try:
         subprocess.run([str(python_path), "main.py"], check=True)
@@ -228,18 +310,20 @@ def run_application():
 def test_voice_functionality():
     """Test if voice functionality is working"""
     python_path = get_venv_python()
-    
+
     if not python_path.exists():
         return False
-    
+
     if not Path("test_voice.py").exists():
         print("⚠️ test_voice.py not found, skipping voice test")
         return True  # Don't fail if test file is missing
-    
+
     print("🧪 Testing voice functionality...")
     try:
-        success, stdout, stderr = run_command(f'"{python_path}" test_voice.py', check=False)
-        
+        success, stdout, stderr = run_command(
+            f'"{python_path}" test_voice.py', check=False
+        )
+
         if success:
             print("✅ Voice functionality test passed")
             return True
@@ -258,11 +342,11 @@ def main():
     # Check Python version
     if not check_python_version():
         return 1
-    
+
     # Create virtual environment
     if not create_virtual_environment():
         return 1
-    
+
     # Install core requirements if needed
     if not check_requirements_installed():
         print("Installing core requirements...")
@@ -270,11 +354,11 @@ def main():
             return 1
     else:
         print("Core requirements already installed")
-    
+
     # Check voice requirements
     voice_available, missing_voice = check_voice_requirements()
     ffmpeg_available = check_ffmpeg()
-    
+
     if not voice_available:
         print("\n" + "=" * 50)
         print("Voice-to-Text Setup (Optional)")
@@ -285,32 +369,53 @@ def main():
         print("To enable voice functionality, run:")
         print(f"  {get_venv_pip()} install {' '.join(missing_voice)}")
         print("")
-        
+
         # Ask user if they want to install voice packages
         try:
             response = input("Install voice packages now? (y/N): ").strip().lower()
-            if response in ['y', 'yes']:
+            if response in ["y", "yes"]:
                 print("Installing voice packages...")
                 pip_path = get_venv_pip()
-                voice_packages_str = ' '.join(missing_voice)
-                
+                voice_packages_str = " ".join(missing_voice)
+
                 # Try with mirror first
                 success, stdout, stderr = run_command(
-                    f'"{pip_path}" install {voice_packages_str} -i https://mirrors.ustc.edu.cn/pypi/simple',
-                    check=False
+                    f'"{pip_path}" install {voice_packages_str} '
+                    f"-i https://mirrors.ustc.edu.cn/pypi/simple",
+                    check=False,
                 )
-                
+
                 if not success:
                     print("Mirror failed, trying default PyPI...")
                     success, stdout, stderr = run_command(
-                        f'"{pip_path}" install {voice_packages_str}',
-                        check=False
+                        f'"{pip_path}" install {voice_packages_str}', check=False
                     )
-                
+
                 if success:
                     print("✅ Voice packages installed successfully")
                     voice_available = True
-                    
+
+                    # Check for GPU support and offer CUDA installation
+                    if platform.system().lower() == "windows":
+                        print("\n" + "=" * 50)
+                        print("GPU Acceleration Setup (Optional)")
+                        print("=" * 50)
+                        try:
+                            gpu_response = (
+                                input(
+                                    "Install PyTorch with CUDA for GPU acceleration? (y/N): "
+                                )
+                                .strip()
+                                .lower()
+                            )
+                            if gpu_response in ["y", "yes"]:
+                                if install_torch_with_cuda():
+                                    print("✅ GPU acceleration enabled")
+                                else:
+                                    print("⚠️ GPU acceleration installation failed")
+                        except (KeyboardInterrupt, EOFError):
+                            print("\nSkipping GPU acceleration setup")
+
                     # Test voice functionality after installation
                     if ffmpeg_available:
                         test_voice_functionality()
@@ -328,11 +433,33 @@ def main():
         if ffmpeg_available:
             try:
                 response = input("Test voice functionality? (Y/n): ").strip().lower()
-                if response not in ['n', 'no']:
+                if response not in ["n", "no"]:
                     test_voice_functionality()
             except (KeyboardInterrupt, EOFError):
                 print("\nSkipping voice test")
-    
+
+        # Check GPU support for existing installations
+        gpu_available, gpu_info = check_gpu_support()
+        if not gpu_available and platform.system().lower() == "windows":
+            print("\n" + "=" * 50)
+            print("GPU Acceleration Setup (Optional)")
+            print("=" * 50)
+            print("⚠️ GPU acceleration not available")
+            print("Install PyTorch with CUDA for better performance")
+            try:
+                gpu_response = (
+                    input("Install PyTorch with CUDA for GPU acceleration? (y/N): ")
+                    .strip()
+                    .lower()
+                )
+                if gpu_response in ["y", "yes"]:
+                    if install_torch_with_cuda():
+                        print("✅ GPU acceleration enabled")
+                    else:
+                        print("⚠️ GPU acceleration installation failed")
+            except (KeyboardInterrupt, EOFError):
+                print("\nSkipping GPU acceleration setup")
+
     if not ffmpeg_available:
         print("\n" + "=" * 50)
         print("FFmpeg Setup (Required for Voice)")
@@ -345,16 +472,16 @@ def main():
         print("  macOS: brew install ffmpeg")
         print("  Linux: sudo apt install ffmpeg")
         print("")
-    
+
     # Final status
     print("\n" + "=" * 50)
     print("Setup Complete")
     print("=" * 50)
-    
+
     # Run the application
     if not run_application():
         return 1
-    
+
     return 0
 
 
