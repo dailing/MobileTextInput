@@ -7,7 +7,6 @@ clipboard copying and keyboard simulation
 
 from functools import partial
 from nicegui import ui, app
-from datetime import datetime
 import logging
 import sys
 import platform
@@ -19,6 +18,7 @@ from typing import List
 from instance_manager import create_application_instance_manager
 from voice_processor import VoiceProcessor
 from key_simulator import create_key_simulator
+from mouse_controller import create_mouse_controller
 from button_definitions import AVAILABLE_BUTTONS
 
 # Configure logging
@@ -76,8 +76,9 @@ instance_manager = create_application_instance_manager("Cursor")
 storage_key = "shared_text"
 
 
-# Initialize key simulator
+# Initialize key simulator and mouse controller
 key_simulator = create_key_simulator()
+mouse_controller = create_mouse_controller()
 
 
 def create_all_buttons(show_status) -> List:
@@ -126,6 +127,7 @@ def text_input_page():
     """Main page function for text input application"""
     # Initialize state variables
     is_recording = False
+    is_mouse_control_active = False
 
     def toggle_voice_recording(voice_button):
         """Toggle voice recording state and trigger JavaScript recording"""
@@ -147,6 +149,46 @@ def text_input_page():
             voice_button.set_text("🎤 Start Recording")
             voice_button.classes(replace="flex-1 p-2 m-1 bg-primary")
             ui.run_javascript("stopRecording();")
+
+    def toggle_mouse_control(mouse_button):
+        """Toggle mouse control state"""
+        nonlocal is_mouse_control_active
+
+        if not mouse_controller.is_available():
+            show_status("Mouse control is not available", "error")
+            return
+
+        is_mouse_control_active = not is_mouse_control_active
+
+        if is_mouse_control_active:
+            mouse_button.set_text("🖱️ Disable Mouse Control")
+            mouse_button.classes(replace="flex-1 p-2 m-1 bg-green-500")
+            show_status("Mouse control enabled", "success")
+        else:
+            mouse_button.set_text("🖱️ Enable Mouse Control")
+            mouse_button.classes(replace="flex-1 p-2 m-1 bg-primary")
+            # Stop any ongoing mouse movement
+            mouse_controller.stop_movement()
+            show_status("Mouse control disabled", "info")
+
+    def handle_joystick_move(event):
+        """Handle joystick movement events"""
+        if is_mouse_control_active:
+            # Update joystick coordinates display
+            coordinates.set_text(f"{event.x:.3f}, {event.y:.3f}")
+
+            # Send movement to mouse controller (y-axis is inverted)
+            mouse_controller.move_mouse(event.x, -event.y)
+        else:
+            # Just update coordinates display
+            coordinates.set_text(f"{event.x:.3f}, {event.y:.3f}")
+
+    def handle_joystick_end(event):
+        """Handle joystick release event"""
+        coordinates.set_text("0, 0")
+        if is_mouse_control_active:
+            # Stop mouse movement when joystick is released
+            mouse_controller.stop_movement()
 
     def show_status(message, status_type="success"):
         """Show status notification to user"""
@@ -181,7 +223,7 @@ def text_input_page():
                         }
 
                     def on_tab_change(e):
-                        selected_workspace = e.value
+                        selected_workspace = e.args
                         if selected_workspace and selected_workspace in instance_tabs:
                             instance = instance_tabs[selected_workspace]["instance"]
                             instance_id = instance.get("id")
@@ -211,11 +253,18 @@ def text_input_page():
         ).classes("w-full")
 
         # Voice input section
-        if voice_enabled:
-            with ui.row().classes("w-full"):
+        with ui.row().classes("w-full"):
+            if voice_enabled:
                 voice_button = ui.button(
-                    "Start Recording",
+                    "🎤 Start Recording",
                     on_click=lambda: toggle_voice_recording(voice_button),
+                ).classes("flex-1 p-2 m-1 bg-primary")
+
+            # Mouse control toggle button
+            if mouse_controller.is_available():
+                mouse_button = ui.button(
+                    "🖱️ Enable Mouse Control",
+                    on_click=lambda: toggle_mouse_control(mouse_button),
                 ).classes("flex-1 p-2 m-1 bg-primary")
 
         # Create buttons from configuration
@@ -230,13 +279,21 @@ def text_input_page():
                     ui.label("🎤 Voice-to-text enabled")
                 else:
                     ui.label("🎤 Voice-to-text disabled")
+
+                if mouse_controller.is_available():
+                    ui.label("🖱️ Mouse control enabled")
+                else:
+                    ui.label("🖱️ Mouse control disabled")
+
+        # Joystick control
+        ui.label("Joystick Control").classes("mb-2")
         ui.joystick(
             color="blue",
             size=350,
-            on_move=lambda e: coordinates.set_text(f"{e.x:.3f}, {e.y:.3f}"),
-            on_end=lambda _: coordinates.set_text("0, 0"),
+            on_move=handle_joystick_move,
+            on_end=handle_joystick_end,
         ).classes("bg-slate-300 w-full")
-    coordinates = ui.label("0, 0")
+        coordinates = ui.label("0, 0")
 
     # Add voice recording JavaScript if enabled
     if voice_enabled:
