@@ -313,6 +313,7 @@ def text_input_page():
             </script>
         """
         )
+    ui.link("permissions", "chrome://flags/#unsafely-treat-insecure-origin-as-secure")
 
     # Add API endpoint for processing recorded audio
 
