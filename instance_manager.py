@@ -5,7 +5,6 @@ Classes for managing multiple software application instances across different op
 """
 
 import logging
-import platform
 import subprocess
 import os
 import ctypes
@@ -13,17 +12,14 @@ from ctypes import wintypes
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from os_detector import os_detector
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # Windows API constants and setup
-CURRENT_OS = platform.system()
-IS_WINDOWS = CURRENT_OS == "Windows"
-IS_MACOS = CURRENT_OS == "Darwin"
-
 # Windows-specific setup
-if IS_WINDOWS:
+if os_detector.is_windows:
     try:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
@@ -118,7 +114,7 @@ class MacOSApplicationInstanceManager(ApplicationInstanceManager):
 
     def is_available(self) -> bool:
         """Check if macOS instance management is available"""
-        return IS_MACOS
+        return os_detector.is_macos
 
     def list_instances(self) -> List[Dict[str, Any]]:
         """List all application instances on macOS using AppleScript"""
@@ -418,7 +414,7 @@ class WindowsApplicationInstanceManager(ApplicationInstanceManager):
 
     def is_available(self) -> bool:
         """Check if Windows instance management is available"""
-        return IS_WINDOWS and WINDOWS_API_AVAILABLE
+        return os_detector.is_windows and WINDOWS_API_AVAILABLE
 
     def list_instances(self) -> List[Dict[str, Any]]:
         """List all application instances on Windows using Windows API"""
@@ -698,21 +694,19 @@ def create_application_instance_manager(
     Returns:
         ApplicationInstanceManager: The appropriate instance manager for the current OS
     """
-    current_os = platform.system()
-
-    if current_os == "Darwin":  # macOS
+    if os_detector.is_macos:
         logger.info(f"🍎 Creating macOS {application_name} instance manager")
         return MacOSApplicationInstanceManager(application_name)
-    elif current_os == "Windows":
+    elif os_detector.is_windows:
         logger.info(f"🪟 Creating Windows {application_name} instance manager")
         return WindowsApplicationInstanceManager(application_name)
-    elif current_os == "Linux":
+    elif os_detector.is_linux:
         logger.info(
             f"🐧 Creating Linux {application_name} instance manager (placeholder)"
         )
         return LinuxApplicationInstanceManager(application_name)
     else:
-        logger.warning(f"⚠️ Unsupported OS: {current_os}")
+        logger.warning(f"⚠️ Unsupported OS: {os_detector.current_os.value}")
         return LinuxApplicationInstanceManager(
             application_name
         )  # Use placeholder for unsupported OS

@@ -2,12 +2,17 @@ from typing import List, Tuple, Callable, NamedTuple, Optional
 import pyperclip
 import logging
 from nicegui import app
+from os_detector import os_detector
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # Storage key for text input
 storage_key = "shared_text"
+
+# OS detection for modifier key selection is now handled by os_detector module
+MODIFIER_KEY = os_detector.modifier_key
+logger.info(f"Using '{MODIFIER_KEY}' as modifier key for {os_detector.current_os.value}")
 
 
 class ButtonConfig(NamedTuple):
@@ -71,7 +76,7 @@ def paste_button() -> ButtonConfig:
         name="Paste",
         classes="",
         pre_action=None,  # No pre-action needed for paste
-        key_sequence=[("ctrl", "down"), ("v", "press"), ("ctrl", "up")],
+        key_sequence=[(MODIFIER_KEY, "down"), ("v", "press"), (MODIFIER_KEY, "up")],
     )
 
 
@@ -82,9 +87,9 @@ def copy_paste_enter_button() -> ButtonConfig:
         classes="",
         pre_action=copy_to_clipboard,  # Copy text before pasting
         key_sequence=[
-            ("ctrl", "down"),
+            (MODIFIER_KEY, "down"),
             ("v", "press"),
-            ("ctrl", "up"),
+            (MODIFIER_KEY, "up"),
             ("enter", "press"),
         ],
     )
@@ -97,9 +102,9 @@ def accept_button() -> ButtonConfig:
         classes="",
         pre_action=None,
         key_sequence=[
-            ("ctrl", "down"),
+            (MODIFIER_KEY, "down"),
             ("enter", "press"),
-            ("ctrl", "up"),
+            (MODIFIER_KEY, "up"),
         ],
     )
 
@@ -111,9 +116,9 @@ def new_button() -> ButtonConfig:
         classes="",
         pre_action=None,
         key_sequence=[
-            ("ctrl", "down"),
+            (MODIFIER_KEY, "down"),
             ("n", "press"),
-            ("ctrl", "up"),
+            (MODIFIER_KEY, "up"),
         ],
     )
 
@@ -125,11 +130,11 @@ def stop_button() -> ButtonConfig:
         classes="bg-red-500",
         pre_action=None,
         key_sequence=[
-            ("ctrl", "down"),
+            (MODIFIER_KEY, "down"),
             ("shift", "down"),
             ("backspace", "press"),
             ("shift", "up"),
-            ("ctrl", "up"),
+            (MODIFIER_KEY, "up"),
         ],
     )
 
@@ -141,9 +146,9 @@ def reject_button() -> ButtonConfig:
         classes="bg-red-500",
         pre_action=None,
         key_sequence=[
-            ("ctrl", "down"),
+            (MODIFIER_KEY, "down"),
             ("backspace", "press"),
-            ("ctrl", "up"),
+            (MODIFIER_KEY, "up"),
         ],
     )
 
@@ -165,9 +170,9 @@ def copy_paste_button() -> ButtonConfig:
         classes="",
         pre_action=copy_to_clipboard,
         key_sequence=[
-            ("ctrl", "down"),
+            (MODIFIER_KEY, "down"),
             ("v", "press"),
-            ("ctrl", "up"),
+            (MODIFIER_KEY, "up"),
         ],
     )
 

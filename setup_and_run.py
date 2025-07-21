@@ -6,8 +6,8 @@ Uses only standard Python library for maximum compatibility
 
 import sys
 import subprocess
-import platform
 from pathlib import Path
+from os_detector import os_detector
 
 
 def get_venv_path():
@@ -58,10 +58,9 @@ def create_virtual_environment():
 
 def get_venv_python():
     """Get the path to Python executable in virtual environment"""
-    system = platform.system().lower()
     venv_path = get_venv_path()
 
-    if system == "windows":
+    if os_detector.is_windows:
         return venv_path / "Scripts" / "python.exe"
     else:
         return venv_path / "bin" / "python"
@@ -69,10 +68,9 @@ def get_venv_python():
 
 def get_venv_pip():
     """Get the path to pip executable in virtual environment"""
-    system = platform.system().lower()
     venv_path = get_venv_path()
 
-    if system == "windows":
+    if os_detector.is_windows:
         return venv_path / "Scripts" / "pip.exe"
     else:
         return venv_path / "bin" / "pip"
@@ -213,7 +211,7 @@ if torch.cuda.is_available():
 
 def install_torch_with_cuda():
     """Install PyTorch with CUDA support on Windows"""
-    if platform.system().lower() != "windows":
+    if not os_detector.is_windows:
         print("CUDA installation is only supported on Windows")
         return False
 
@@ -372,7 +370,7 @@ def main():
                     voice_available = True
 
                     # Check for GPU support and offer CUDA installation
-                    if platform.system().lower() == "windows":
+                    if os_detector.is_windows:
                         print("\n" + "=" * 50)
                         print("GPU Acceleration Setup (Optional)")
                         print("=" * 50)
@@ -416,7 +414,7 @@ def main():
 
         # Check GPU support for existing installations
         gpu_available, gpu_info = check_gpu_support()
-        if not gpu_available and platform.system().lower() == "windows":
+        if not gpu_available and os_detector.is_windows:
             print("\n" + "=" * 50)
             print("GPU Acceleration Setup (Optional)")
             print("=" * 50)

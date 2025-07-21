@@ -20,6 +20,7 @@ from voice_processor import VoiceProcessor
 from key_simulator import create_key_simulator
 from mouse_controller import create_mouse_controller
 from button_definitions import AVAILABLE_BUTTONS
+from os_detector import os_detector
 
 # Configure logging
 logging.basicConfig(
@@ -55,18 +56,7 @@ except ImportError as e:
     CUDA_AVAILABLE = False
     logger.warning(f"⚠️ Voice-to-text libraries not available: {e}")
 
-# OS detection
-CURRENT_OS = platform.system()
-logger.info(f"🖥️ Detected operating system: {CURRENT_OS}")
-IS_MACOS = CURRENT_OS == "Darwin"
-IS_WINDOWS = CURRENT_OS == "Windows"
-
-if IS_MACOS:
-    logger.info("🍎 macOS detected - will use Cmd+V for paste operations")
-elif IS_WINDOWS:
-    logger.info("🪟 Windows detected - will use Ctrl+V for paste operations")
-else:
-    logger.info("🐧 Linux detected - will use Ctrl+V for paste operations")
+# OS detection is now handled by os_detector module
 
 
 # Initialize components
@@ -77,6 +67,7 @@ storage_key = "shared_text"
 
 
 # Initialize key simulator and mouse controller
+# OS detection is now handled centrally by os_detector module
 key_simulator = create_key_simulator()
 mouse_controller = create_mouse_controller()
 
@@ -127,7 +118,6 @@ def text_input_page():
     """Main page function for text input application"""
     # Initialize state variables
     is_recording = False
-    is_mouse_control_active = False
 
     def toggle_voice_recording(voice_button):
         """Toggle voice recording state and trigger JavaScript recording"""
@@ -149,46 +139,6 @@ def text_input_page():
             voice_button.set_text("🎤 Start Recording")
             voice_button.classes(replace="flex-1 p-2 m-1 bg-primary")
             ui.run_javascript("stopRecording();")
-
-    def toggle_mouse_control(mouse_button):
-        """Toggle mouse control state"""
-        nonlocal is_mouse_control_active
-
-        if not mouse_controller.is_available():
-            show_status("Mouse control is not available", "error")
-            return
-
-        is_mouse_control_active = not is_mouse_control_active
-
-        if is_mouse_control_active:
-            mouse_button.set_text("🖱️ Disable Mouse Control")
-            mouse_button.classes(replace="flex-1 p-2 m-1 bg-green-500")
-            show_status("Mouse control enabled", "success")
-        else:
-            mouse_button.set_text("🖱️ Enable Mouse Control")
-            mouse_button.classes(replace="flex-1 p-2 m-1 bg-primary")
-            # Stop any ongoing mouse movement
-            mouse_controller.stop_movement()
-            show_status("Mouse control disabled", "info")
-
-    def handle_joystick_move(event):
-        """Handle joystick movement events"""
-        if is_mouse_control_active:
-            # Update joystick coordinates display
-            coordinates.set_text(f"{event.x:.3f}, {event.y:.3f}")
-
-            # Send movement to mouse controller (y-axis is inverted)
-            mouse_controller.move_mouse(event.x, -event.y)
-        else:
-            # Just update coordinates display
-            coordinates.set_text(f"{event.x:.3f}, {event.y:.3f}")
-
-    def handle_joystick_end(event):
-        """Handle joystick release event"""
-        coordinates.set_text("0, 0")
-        if is_mouse_control_active:
-            # Stop mouse movement when joystick is released
-            mouse_controller.stop_movement()
 
     def show_status(message, status_type="success"):
         """Show status notification to user"""
@@ -260,16 +210,43 @@ def text_input_page():
                     on_click=lambda: toggle_voice_recording(voice_button),
                 ).classes("flex-1 p-2 m-1 bg-primary")
 
-            # Mouse control toggle button
-            if mouse_controller.is_available():
-                mouse_button = ui.button(
-                    "🖱️ Enable Mouse Control",
-                    on_click=lambda: toggle_mouse_control(mouse_button),
-                ).classes("flex-1 p-2 m-1 bg-primary")
-
         # Create buttons from configuration
         with ui.row().classes("w-full border justify-center"):
             create_all_buttons(show_status)
+
+        
+        # Define joystick handlers after coordinates is available
+        def handle_joystick_start(event):
+            """Handle joystick start event"""
+            # Call mouse controller on_start method
+            success = mouse_controller.on_start()
+            if success:
+                show_status("Mouse control started", "success")
+            else:
+                show_status("Failed to start mouse control", "error")
+            coordinates.set_text("0, 0")
+
+        def handle_joystick_move(event):
+            """Handle joystick movement events"""
+            # Update joystick coordinates display
+            coordinates.set_text(f"{event.x:.3f}, {event.y:.3f}")
+
+            # Call mouse controller on_move method
+            mouse_controller.on_move(event.x, event.y)
+
+        def handle_joystick_end(event):
+            """Handle joystick release event"""
+            coordinates.set_text("0, 0")
+            # Call mouse controller on_end method
+            mouse_controller.on_end()
+        
+        ui.joystick(
+            color="blue",
+            size=350,
+            on_start=handle_joystick_start,
+            on_move=handle_joystick_move,
+            on_end=handle_joystick_end,
+        ).classes("bg-slate-300 w-full")
 
         # Status section
         with ui.column().classes("w-full p-2 my-2"):
@@ -281,18 +258,12 @@ def text_input_page():
                     ui.label("🎤 Voice-to-text disabled")
 
                 if mouse_controller.is_available():
-                    ui.label("🖱️ Mouse control enabled")
+                    ui.label("🖱️ Mouse control always enabled")
                 else:
-                    ui.label("🖱️ Mouse control disabled")
+                    ui.label("🖱️ Mouse control not available")
 
         # Joystick control
         ui.label("Joystick Control").classes("mb-2")
-        ui.joystick(
-            color="blue",
-            size=350,
-            on_move=handle_joystick_move,
-            on_end=handle_joystick_end,
-        ).classes("bg-slate-300 w-full")
         coordinates = ui.label("0, 0")
 
     # Add voice recording JavaScript if enabled

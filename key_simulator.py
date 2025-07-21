@@ -4,10 +4,10 @@ Key Simulator Module
 Provides cross-platform keyboard simulation functionality
 """
 
-import platform
 import time
 import logging
 from typing import List, Tuple, Optional
+from os_detector import os_detector
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -25,8 +25,7 @@ except ImportError:
     logger.warning("⚠️ pynput not available - keyboard simulation disabled")
 
 # Windows-specific setup
-CURRENT_OS = platform.system()
-if CURRENT_OS == "Windows":
+if os_detector.is_windows:
     try:
         import ctypes
 
@@ -41,16 +40,14 @@ else:
     WINDOWS_API_AVAILABLE = False
     user32 = None
 
-# OS detection
-IS_MACOS = CURRENT_OS == "Darwin"
-IS_WINDOWS = CURRENT_OS == "Windows"
+# OS detection is now handled by os_detector module
 
 
 class KeySimulator:
     """Sequence-based key simulation handler"""
 
     def __init__(self):
-        self.current_os = platform.system()
+        self.current_os = os_detector.current_os
 
     def simulate_key_sequence(self, key_sequence: List[Tuple[str, str]]) -> bool:
         """
@@ -67,13 +64,26 @@ class KeySimulator:
             logger.error("❌ Keyboard simulation not available")
             return False
 
+        logger.info(f"🎹 Simulating key sequence: {key_sequence}")
+        
         try:
-            for key, action in key_sequence:
+            for i, (key, action) in enumerate(key_sequence):
+                logger.debug(f"🎹 Step {i+1}: {key} {action}")
                 success = self._simulate_key_action(key, action)
                 if not success:
+                    logger.error(f"❌ Failed at step {i+1}: {key} {action}")
                     return False
-                # Small delay between key actions for reliability
-                time.sleep(0.01)
+                
+                # OS-specific timing for reliability
+                delay = os_detector.get_os_specific_delay(action)
+                if os_detector.is_macos:
+                    logger.debug(f"🍎 macOS delay: {delay}s")
+                else:
+                    logger.debug(f"🪟 Windows/Linux delay: {delay}s")
+                
+                time.sleep(delay)
+                    
+            logger.info("✅ Key sequence completed successfully")
             return True
 
         except Exception as e:
@@ -108,17 +118,22 @@ class KeySimulator:
     def _key_down(self, key: str) -> bool:
         """Press a key down (and hold)"""
         try:
+            logger.debug(f"🔽 Key down: {key}")
+            
             if self.current_os == "Windows" and WINDOWS_API_AVAILABLE and user32:
                 vk_code = self._get_windows_vk_code(key)
                 if vk_code:
                     user32.keybd_event(vk_code, 0, 0, 0)  # Key down
+                    logger.debug(f"🪟 Windows key down: {key} (VK: {vk_code})")
                     return True
 
             if PYNPUT_AVAILABLE and keyboard_controller:
                 pynput_key = self._get_pynput_key(key)
                 keyboard_controller.press(pynput_key)
+                logger.debug(f"🎹 pynput key down: {key} -> {pynput_key}")
                 return True
 
+            logger.error(f"❌ No available method for key down: {key}")
             return False
         except Exception as e:
             logger.error(f"❌ Key down failed: {e}")
@@ -127,17 +142,22 @@ class KeySimulator:
     def _key_up(self, key: str) -> bool:
         """Release a key"""
         try:
+            logger.debug(f"🔼 Key up: {key}")
+            
             if self.current_os == "Windows" and WINDOWS_API_AVAILABLE and user32:
                 vk_code = self._get_windows_vk_code(key)
                 if vk_code:
                     user32.keybd_event(vk_code, 0, 2, 0)  # Key up
+                    logger.debug(f"🪟 Windows key up: {key} (VK: {vk_code})")
                     return True
 
             if PYNPUT_AVAILABLE and keyboard_controller:
                 pynput_key = self._get_pynput_key(key)
                 keyboard_controller.release(pynput_key)
+                logger.debug(f"🎹 pynput key up: {key} -> {pynput_key}")
                 return True
 
+            logger.error(f"❌ No available method for key up: {key}")
             return False
         except Exception as e:
             logger.error(f"❌ Key up failed: {e}")
@@ -146,19 +166,24 @@ class KeySimulator:
     def _press_key(self, key_name: str) -> bool:
         """Press a single key"""
         try:
+            logger.debug(f"🔘 Press key: {key_name}")
+            
             if self.current_os == "Windows" and WINDOWS_API_AVAILABLE and user32:
                 # Use Windows native API for simple keys
                 if key_name == "enter":
                     user32.keybd_event(0x0D, 0, 0, 0)  # Enter down
                     user32.keybd_event(0x0D, 0, 2, 0)  # Enter up
+                    logger.debug(f"🪟 Windows press: {key_name}")
                     return True
 
             if PYNPUT_AVAILABLE and keyboard_controller:
                 pynput_key = self._get_pynput_key(key_name)
                 keyboard_controller.press(pynput_key)
                 keyboard_controller.release(pynput_key)
+                logger.debug(f"🎹 pynput press: {key_name} -> {pynput_key}")
                 return True
 
+            logger.error(f"❌ No available method for press: {key_name}")
             return False
 
         except Exception as e:
@@ -228,5 +253,8 @@ class KeySimulator:
 
 
 def create_key_simulator() -> KeySimulator:
-    """Factory function to create a KeySimulator instance"""
+    """Factory function to create a KeySimulator instance
+    
+    Note: OS detection is now handled centrally by os_detector module
+    """
     return KeySimulator()
