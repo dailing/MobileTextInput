@@ -9,7 +9,6 @@ from functools import partial
 from nicegui import ui, app
 import logging
 import sys
-import platform
 import tempfile
 import os
 import asyncio
@@ -20,7 +19,6 @@ from voice_processor import VoiceProcessor
 from key_simulator import create_key_simulator
 from mouse_controller import create_mouse_controller
 from button_definitions import AVAILABLE_BUTTONS
-from os_detector import os_detector
 
 # Configure logging
 logging.basicConfig(
@@ -214,16 +212,11 @@ def text_input_page():
         with ui.row().classes("w-full border justify-center"):
             create_all_buttons(show_status)
 
-        
         # Define joystick handlers after coordinates is available
         def handle_joystick_start(event):
             """Handle joystick start event"""
             # Call mouse controller on_start method
-            success = mouse_controller.on_start()
-            if success:
-                show_status("Mouse control started", "success")
-            else:
-                show_status("Failed to start mouse control", "error")
+            mouse_controller.on_start()
             coordinates.set_text("0, 0")
 
         def handle_joystick_move(event):
@@ -239,7 +232,15 @@ def text_input_page():
             coordinates.set_text("0, 0")
             # Call mouse controller on_end method
             mouse_controller.on_end()
-        
+
+        def handle_left_click():
+            """Handle left mouse button click"""
+            mouse_controller.click_left_button()
+
+        def handle_right_click():
+            """Handle right mouse button click"""
+            mouse_controller.click_right_button()
+
         ui.joystick(
             color="blue",
             size=350,
@@ -247,6 +248,18 @@ def text_input_page():
             on_move=handle_joystick_move,
             on_end=handle_joystick_end,
         ).classes("bg-slate-300 w-full")
+
+        # Mouse button controls - split into two halves
+        with ui.row().classes("w-full mt-2"):
+            ui.button(
+                "Left Click",
+                on_click=handle_left_click,
+            ).classes("flex-1 p-4 m-1 bg-green-500 text-white font-bold")
+            
+            ui.button(
+                "Right Click",
+                on_click=handle_right_click,
+            ).classes("flex-1 p-4 m-1 bg-red-500 text-white font-bold")
 
         # Status section
         with ui.column().classes("w-full p-2 my-2"):

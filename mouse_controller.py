@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Import mouse simulation library
 try:
-    from pynput.mouse import Controller as MouseController
+    from pynput.mouse import Controller as MouseController, Button
 
     mouse_controller = MouseController()
     PYNPUT_AVAILABLE = True
@@ -47,6 +47,44 @@ class MouseControllerManager:
         if not self.is_available():
             return (0, 0)
         return mouse_controller.position
+
+    def click_left_button(self) -> bool:
+        """
+        Simulate left mouse button click
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not self.is_available():
+            logger.error("❌ Mouse control not available")
+            return False
+
+        try:
+            mouse_controller.click(Button.left)
+            logger.info("Left mouse button clicked")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error clicking left mouse button: {e}")
+            return False
+
+    def click_right_button(self) -> bool:
+        """
+        Simulate right mouse button click
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not self.is_available():
+            logger.error("❌ Mouse control not available")
+            return False
+
+        try:
+            mouse_controller.click(Button.right)
+            logger.info("Right mouse button clicked")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error clicking right mouse button: {e}")
+            return False
 
     def on_start(self) -> bool:
         """
