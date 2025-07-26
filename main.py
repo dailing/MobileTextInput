@@ -12,6 +12,9 @@ import sys
 import tempfile
 import os
 import asyncio
+import json
+from datetime import datetime
+from pathlib import Path
 from fastapi import Request
 from typing import List
 from instance_manager import create_application_instance_manager
@@ -29,6 +32,87 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+# Text backup configuration
+BACKUP_DIR = Path.home() / ".webinput_backups"
+BACKUP_FILE = BACKUP_DIR / "voice_text_backup.json"
+AUTO_SAVE_FILE = BACKUP_DIR / "auto_save.txt"
+
+
+def ensure_backup_directory():
+    """Ensure backup directory exists"""
+    BACKUP_DIR.mkdir(exist_ok=True)
+    logger.info(f"📁 Backup directory: {BACKUP_DIR}")
+
+
+def save_text_backup(text: str, source: str = "manual"):
+    """Save text to backup file with timestamp"""
+    try:
+        ensure_backup_directory()
+        
+        # Save to auto-save file (latest text)
+        with open(AUTO_SAVE_FILE, 'w', encoding='utf-8') as f:
+            f.write(text)
+        
+        # Save to backup history with timestamp
+        backup_data = {
+            "timestamp": datetime.now().isoformat(),
+            "source": source,
+            "text": text,
+            "text_length": len(text)
+        }
+        
+        # Load existing backups
+        backups = []
+        if BACKUP_FILE.exists():
+            try:
+                with open(BACKUP_FILE, 'r', encoding='utf-8') as f:
+                    backups = json.load(f)
+            except (json.JSONDecodeError, Exception):
+                backups = []
+        
+        # Add new backup
+        backups.append(backup_data)
+        
+        # Keep only last 10 backups to prevent file from growing too large
+        backups = backups[-10:]
+        
+        # Save updated backups
+        with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
+            json.dump(backups, f, indent=2, ensure_ascii=False)
+            
+        logger.info(f"💾 Text backup saved ({len(text)} chars)")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to save text backup: {e}")
+        return False
+
+
+def load_latest_backup():
+    """Load the latest auto-saved text"""
+    try:
+        if AUTO_SAVE_FILE.exists():
+            with open(AUTO_SAVE_FILE, 'r', encoding='utf-8') as f:
+                text = f.read()
+                logger.info(f"📂 Loaded backup text ({len(text)} chars)")
+                return text
+    except Exception as e:
+        logger.error(f"❌ Failed to load backup: {e}")
+    return ""
+
+
+def get_backup_history():
+    """Get list of previous backups"""
+    try:
+        if BACKUP_FILE.exists():
+            with open(BACKUP_FILE, 'r', encoding='utf-8') as f:
+                backups = json.load(f)
+                return backups[-5:]  # Return last 5 backups
+    except Exception as e:
+        logger.error(f"❌ Failed to load backup history: {e}")
+    return []
+
 
 # Import voice-to-text libraries
 try:
@@ -147,6 +231,64 @@ def text_input_page():
         else:
             ui.notify(message, type="info")
 
+    def auto_save_text():
+        """Auto-save current text to backup"""
+        current_text = app.storage.general.get(storage_key, "") or ""
+        if current_text.strip():
+            if save_text_backup(current_text, "auto_save"):
+                return True
+        return False
+
+    def recover_latest_text():
+        """Recover latest backup text"""
+        backup_text = load_latest_backup()
+        if backup_text:
+            app.storage.general[storage_key] = backup_text
+            show_status(f"Recovered text ({len(backup_text)} characters)", "success")
+            return True
+        else:
+            show_status("No backup text found", "info")
+            return False
+
+    def restore_backup(backup_data):
+        """Restore a specific backup"""
+        app.storage.general[storage_key] = backup_data['text']
+        show_status(f"Restored backup from {backup_data['timestamp']}", "success")
+
+    def refresh_backup_table():
+        """Refresh the backup history table"""
+        backup_container.clear()
+        backups = get_backup_history()
+        
+        if backups:
+            with backup_container:
+                ui.label('Backup History').classes('text-lg font-bold mb-2')
+                
+                # Create table headers
+                with ui.row().classes('w-full border-b pb-2 mb-2'):
+                    ui.label('Time').classes('flex-1 font-bold')
+                    ui.label('Source').classes('flex-1 font-bold')  
+                    ui.label('Text Preview').classes('flex-2 font-bold')
+                    ui.label('Action').classes('w-20 font-bold')
+                
+                # Create table rows
+                for backup in reversed(backups):  # Show newest first
+                    timestamp = datetime.fromisoformat(backup['timestamp']).strftime('%m-%d %H:%M')
+                    source = backup['source'].replace('_', ' ').title()
+                    
+                    # Truncate text preview to first 50 characters
+                    text_preview = backup['text'].replace('\n', ' ').strip()
+                    if len(text_preview) > 50:
+                        text_preview = text_preview[:50] + '...'
+                    
+                    with ui.row().classes('w-full border-b py-1 items-center'):
+                        ui.label(timestamp).classes('flex-1 text-sm')
+                        ui.label(source).classes('flex-1 text-sm')
+                        ui.label(text_preview).classes('flex-2 text-sm')
+                        ui.button('Restore', 
+                                  on_click=lambda b=backup: restore_backup(b)
+                                  ).classes('w-16 h-8 bg-blue-500 text-white text-xs')
+
     def refresh_instances():
         """Refresh and recreate the instance tabs"""
         instance_container.clear()
@@ -261,23 +403,23 @@ def text_input_page():
                 on_click=handle_right_click,
             ).classes("flex-1 p-4 m-1 bg-red-500 text-white font-bold")
 
-        # Status section
-        with ui.column().classes("w-full p-2 my-2"):
-            ui.label("System Status").classes("mb-2")
-            with ui.column():
-                if voice_enabled:
-                    ui.label("🎤 Voice-to-text enabled")
-                else:
-                    ui.label("🎤 Voice-to-text disabled")
+        # Text backup/recovery controls
+        with ui.row().classes("w-full mt-2"):
+            ui.button("💾 Save Backup", 
+                      on_click=lambda: auto_save_text() and show_status("Text backup saved!", "success")
+                      ).classes("flex-1 p-2 m-1 bg-green-600 text-white")
+            ui.button("📂 Recover Latest", 
+                      on_click=recover_latest_text
+                      ).classes("flex-1 p-2 m-1 bg-blue-600 text-white")
 
-                if mouse_controller.is_available():
-                    ui.label("🖱️ Mouse control always enabled")
-                else:
-                    ui.label("🖱️ Mouse control not available")
-
-        # Joystick control
-        ui.label("Joystick Control").classes("mb-2")
+        # Joystick coordinates
         coordinates = ui.label("0, 0")
+
+        # Backup history table at the bottom
+        backup_container = ui.column().classes("w-full mt-4")
+        
+    # Initialize backup table
+    refresh_backup_table()
 
     # Add voice recording JavaScript if enabled
     if voice_enabled:
@@ -354,7 +496,6 @@ def text_input_page():
             </script>
         """
         )
-    ui.link("permissions", "chrome://flags/#unsafely-treat-insecure-origin-as-secure")
 
     # Add API endpoint for processing recorded audio
 
@@ -391,12 +532,17 @@ async def process_audio(request: Request):
         if result.get("success"):
             transcribed_text = result["text"]
             if transcribed_text:
-                current_text = app.storage.general.get(storage_key, "")
-                app.storage.general[storage_key] = (
+                current_text = app.storage.general.get(storage_key, "") or ""
+                new_text = (
                     current_text + "\n" + transcribed_text
                     if current_text
                     else transcribed_text
                 )
+                app.storage.general[storage_key] = new_text
+                
+                # Auto-save the updated text to backup
+                save_text_backup(new_text, "voice_transcription")
+                
                 return {
                     "success": True,
                     "text": transcribed_text,
@@ -420,7 +566,7 @@ def main():
         host="0.0.0.0",
         port=8080,
         title="Mobile Text Input",
-        reload=True,
+        reload=False,
         dark=True,
         show=False,
         storage_secret="mobile-text-input-secret-key-2024",

@@ -31,7 +31,7 @@ def copy_to_clipboard() -> bool:
     Returns:
         bool: True if copy was successful, False otherwise
     """
-    current_text = app.storage.general.get(storage_key, "")
+    current_text = app.storage.general.get(storage_key, "") or ""
     text = current_text.strip() if current_text else ""
 
     if not text:
