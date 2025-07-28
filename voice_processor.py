@@ -59,6 +59,12 @@ class VoiceProcessor:
 
             # Load model with device specification
             self.model = whisper.load_model(model_size, device=self.device)
+            
+            # Ensure model is on correct device (one-time setup)
+            if CUDA_AVAILABLE and hasattr(self.model, "to"):
+                self.model.to(self.device)
+                logger.info(f"🎯 Model moved to device: {self.device}")
+            
             self.model_loaded = True
 
             logger.info(f"✅ Whisper {model_size} model loaded successfully")
@@ -119,10 +125,7 @@ class VoiceProcessor:
             if language:
                 options["language"] = language
 
-            # Ensure model is on correct device
-            if CUDA_AVAILABLE and hasattr(self.model, "to"):
-                self.model.to(self.device)
-
+            # Model is already on correct device from initial loading
             result = self.model.transcribe(audio_file_path, **options)
 
             processing_time = time.time() - start_time

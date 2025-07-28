@@ -147,6 +147,10 @@ voice_enabled = WHISPER_AVAILABLE
 instance_manager = create_application_instance_manager("Cursor")
 storage_key = "shared_text"
 
+# Voice processing lock to prevent race conditions
+voice_processing_lock = asyncio.Lock()
+voice_request_counter = 0
+
 
 # Initialize key simulator and mouse controller
 # OS detection is now handled centrally by os_detector module
@@ -455,6 +459,9 @@ def text_input_page():
                         );
                         const audioData = await audioBlob.arrayBuffer();
                         
+                        console.log('🎤 Audio recording completed, sending to backend...');
+                        console.log(`📁 Audio data size: ${audioData.byteLength} bytes`);
+                        
                         // Send audio data to backend
                         fetch('/process-audio', {
                             method: 'POST',
@@ -464,8 +471,18 @@ def text_input_page():
                             body: audioData
                         })
                         .then(response => response.json())
+                        .then(result => {
+                            if (result.success) {
+                                console.log(`✅ Voice request #${result.request_id || 'unknown'} completed successfully`);
+                                console.log(`📝 Transcribed: "${result.text}"`);
+                                console.log(`⏱️ Processing time: ${result.processing_time || 0}s`);
+                                console.log(`🌍 Language: ${result.language || 'unknown'}`);
+                            } else {
+                                console.error(`❌ Voice request #${result.request_id || 'unknown'} failed:`, result.error);
+                            }
+                        })
                         .catch(error => {
-                            console.error('Error processing audio:', error);
+                            console.error('❌ Error processing audio:', error);
                         });
                         
                         // Stop all tracks
@@ -502,16 +519,29 @@ def text_input_page():
 
 @app.post("/process-audio")
 async def process_audio(request: Request):
-    """Handle recorded audio data from push-to-talk"""
+    """Handle recorded audio data from push-to-talk with race condition protection"""
+    global voice_request_counter
+    
+    # Assign unique request ID for tracking
+    voice_request_counter += 1
+    request_id = voice_request_counter
+    
+    logger.info(f"🎤 Voice request #{request_id} received - checking for audio data")
+    
     try:
         audio_data = await request.body()
         if not audio_data:
+            logger.warning(f"❌ Voice request #{request_id} failed - no audio data received")
             return {"success": False, "error": "No audio data received"}
 
-        # Process the audio
+        logger.info(f"📁 Voice request #{request_id} - audio data received ({len(audio_data)} bytes)")
+
+        # Process the audio file creation
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
             temp_file.write(audio_data)
             temp_file_path = temp_file.name
+
+        logger.info(f"💾 Voice request #{request_id} - temp file created: {temp_file_path}")
 
         # Use type-safe function call
         transcribe_func = (
@@ -522,42 +552,82 @@ async def process_audio(request: Request):
                 "error": "Voice processing not available",
             }
         )
-        result = await asyncio.to_thread(lambda: transcribe_func(temp_file_path))
 
-        try:
-            os.unlink(temp_file_path)
-        except OSError:
-            pass
+        # CRITICAL SECTION: Acquire lock to prevent race conditions
+        logger.info(f"⏳ Voice request #{request_id} - waiting for processing lock...")
+        
+        async with voice_processing_lock:
+            logger.info(f"🔒 Voice request #{request_id} - LOCK ACQUIRED, starting transcription")
+            
+            # Read current storage state while locked
+            current_text_before = app.storage.general.get(storage_key, "") or ""
+            logger.info(f"📖 Voice request #{request_id} - current text length: {len(current_text_before)} chars")
+            
+            # Process the audio (this is the time-consuming part)
+            result = await asyncio.to_thread(lambda: transcribe_func(temp_file_path))
+            logger.info(f"🎯 Voice request #{request_id} - transcription completed")
 
-        if result.get("success"):
-            transcribed_text = result["text"]
-            if transcribed_text:
-                current_text = app.storage.general.get(storage_key, "") or ""
-                new_text = (
-                    current_text + "\n" + transcribed_text
-                    if current_text
-                    else transcribed_text
-                )
-                app.storage.general[storage_key] = new_text
-                
-                # Auto-save the updated text to backup
-                save_text_backup(new_text, "voice_transcription")
-                
-                return {
-                    "success": True,
-                    "text": transcribed_text,
-                    "processing_time": result.get("processing_time", 0),
-                    "language": result.get("language", "unknown"),
-                }
+            # Clean up temp file
+            try:
+                os.unlink(temp_file_path)
+                logger.info(f"🗑️ Voice request #{request_id} - temp file cleaned up")
+            except OSError:
+                logger.warning(f"⚠️ Voice request #{request_id} - failed to clean up temp file")
 
+            if result.get("success"):
+                transcribed_text = result["text"]
+                if transcribed_text:
+                    # Update storage atomically while still locked
+                    current_text_after = app.storage.general.get(storage_key, "") or ""
+                    
+                    # Check if storage was modified during processing (defensive check)
+                    if current_text_after != current_text_before:
+                        logger.warning(f"⚠️ Voice request #{request_id} - storage changed during processing!")
+                        logger.warning(f"   Before: {len(current_text_before)} chars")
+                        logger.warning(f"   After: {len(current_text_after)} chars")
+                        # Use the current state anyway (most recent)
+                        current_text = current_text_after
+                    else:
+                        current_text = current_text_before
+                    
+                    new_text = (
+                        current_text + "\n" + transcribed_text
+                        if current_text
+                        else transcribed_text
+                    )
+                    app.storage.general[storage_key] = new_text
+                    
+                    logger.info(f"✅ Voice request #{request_id} - storage updated")
+                    logger.info(f"   Added: '{transcribed_text[:50]}{'...' if len(transcribed_text) > 50 else ''}'")
+                    logger.info(f"   New total length: {len(new_text)} chars")
+                    
+                    # Auto-save the updated text to backup
+                    save_text_backup(new_text, f"voice_transcription_req_{request_id}")
+                    
+                    logger.info(f"🔓 Voice request #{request_id} - LOCK RELEASED, request completed successfully")
+                    
+                    return {
+                        "success": True,
+                        "text": transcribed_text,
+                        "processing_time": result.get("processing_time", 0),
+                        "language": result.get("language", "unknown"),
+                        "request_id": request_id,
+                    }
+                else:
+                    logger.warning(f"⚠️ Voice request #{request_id} - transcription successful but empty text")
+            else:
+                logger.error(f"❌ Voice request #{request_id} - transcription failed: {result.get('error', 'Unknown error')}")
+
+        logger.error(f"❌ Voice request #{request_id} - failed to process audio")
         return {
             "success": False,
             "error": result.get("error", "Failed to process audio"),
+            "request_id": request_id,
         }
 
     except Exception as e:
-        logger.error(f"❌ API audio processing error: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"❌ Voice request #{request_id} - API error: {e}")
+        return {"success": False, "error": str(e), "request_id": request_id}
 
 
 def main():
