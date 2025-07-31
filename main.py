@@ -204,27 +204,73 @@ def text_input_page():
     """Main page function for text input application"""
     # Initialize state variables
     is_recording = False
+    voice_container = None
+    clip_button = None
+    stop_button = None
 
-    def toggle_voice_recording(voice_button):
-        """Toggle voice recording state and trigger JavaScript recording"""
-        nonlocal is_recording
+    def start_recording():
+        """Start initial recording and show split buttons"""
+        nonlocal is_recording, voice_container, clip_button, stop_button
 
         if not voice_enabled:
             show_status("Voice-to-text is not available", "error")
             return
 
+        if is_recording:
+            return
+
+        # Start recording
+        is_recording = True
+        
+        # Clear the container and add split buttons
+        voice_container.clear()
+        with voice_container:
+            with ui.row().classes("w-full gap-1"):
+                clip_button = ui.button(
+                    "📎 Clip & Continue",
+                    on_click=clip_and_continue
+                ).classes("flex-1 p-2 bg-blue-500 text-white")
+                
+                stop_button = ui.button(
+                    "⏹️ Stop",
+                    on_click=stop_recording
+                ).classes("flex-1 p-2 bg-red-500 text-white")
+
+        ui.run_javascript("startRecording();")
+        show_status("Recording started - use 'Clip & Continue' to segment your audio", "success")
+
+    def clip_and_continue():
+        """Stop current recording, send to server, and immediately start new recording"""
+        nonlocal is_recording
+
         if not is_recording:
-            # Start recording
-            is_recording = True
-            voice_button.set_text("Recording... (Click to Stop)")
-            voice_button.classes(replace="flex-1 p-2 m-1 bg-red-500")
-            ui.run_javascript("startRecording();")
-        else:
-            # Stop recording
-            is_recording = False
-            voice_button.set_text("🎤 Start Recording")
-            voice_button.classes(replace="flex-1 p-2 m-1 bg-primary")
-            ui.run_javascript("stopRecording();")
+            return
+
+        # This will trigger the current recording to stop and send to server
+        # Then immediately start a new recording
+        ui.run_javascript("clipAndContinue();")
+        show_status("Audio clipped and sent for processing - continuing recording...", "success")
+
+    def stop_recording():
+        """Stop recording completely and return to initial state"""
+        nonlocal is_recording, voice_container
+
+        if not is_recording:
+            return
+
+        # Stop recording
+        is_recording = False
+        ui.run_javascript("stopRecording();")
+
+        # Return to initial single button state
+        voice_container.clear()
+        with voice_container:
+            ui.button(
+                "🎤 Start Recording",
+                on_click=start_recording
+            ).classes("flex-1 p-2 m-1 bg-primary")
+
+        show_status("Recording stopped", "success")
 
     def show_status(message, status_type="success"):
         """Show status notification to user"""
@@ -347,11 +393,12 @@ def text_input_page():
         ).classes("w-full")
 
         # Voice input section
-        with ui.row().classes("w-full"):
-            if voice_enabled:
-                voice_button = ui.button(
+        if voice_enabled:
+            voice_container = ui.row().classes("w-full")
+            with voice_container:
+                ui.button(
                     "🎤 Start Recording",
-                    on_click=lambda: toggle_voice_recording(voice_button),
+                    on_click=start_recording
                 ).classes("flex-1 p-2 m-1 bg-primary")
 
         # Create buttons from configuration
@@ -508,6 +555,23 @@ def text_input_page():
                 if (mediaRecorder && isRecording) {
                     mediaRecorder.stop();
                 }
+            }
+            
+            async function clipAndContinue() {
+                if (!mediaRecorder || !isRecording) return;
+                
+                // Stop current recording (this will trigger onstop and send audio to server)
+                mediaRecorder.stop();
+                
+                // Wait a brief moment for the stop to process, then start new recording
+                setTimeout(async () => {
+                    try {
+                        // Start a new recording immediately
+                        await startRecording();
+                    } catch (error) {
+                        console.error('Error starting new recording after clip:', error);
+                    }
+                }, 100);
             };
             
             </script>
