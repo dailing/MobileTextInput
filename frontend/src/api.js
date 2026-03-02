@@ -44,8 +44,11 @@ export async function getButtons() {
   return request('/buttons')
 }
 
-export async function simulate(buttonId) {
-  return request('/simulate', { method: 'POST', body: JSON.stringify({ button_id: buttonId }) })
+export async function simulate(buttonIdOrActionSeqId, isActionSeqId = false) {
+  const body = isActionSeqId 
+    ? { action_sequence_id: buttonIdOrActionSeqId }
+    : { button_id: buttonIdOrActionSeqId }
+  return request('/simulate', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export async function getWindows() {

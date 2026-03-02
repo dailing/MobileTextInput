@@ -10,9 +10,11 @@
         type="button"
         class="hotkey-btn"
         :class="btn.classes"
-        @click="onClick(btn)"
+        :style="getButtonStyle(btn)"
+        @click="onClick(btn, $event)"
+        @dblclick="onDblClick(btn, $event)"
       >
-        {{ btn.name }}
+        {{ getButtonText(btn) }}
       </button>
     </div>
     <section class="text-input-section">
@@ -80,10 +82,14 @@ const messageType = ref('success')
 const textToSend = ref('')
 const sending = ref(false)
 
-// Touchpad state
+const buttonStates = ref(new Map())
+
 const touchpadRef = ref(null)
 const lastPos = ref(null)
 const sensitivity = 1.5
+
+const clickTimers = ref(new Map())
+const DOUBLE_CLICK_DELAY = 300
 
 async function load(skipWindows = false) {
   loading.value = true
@@ -92,6 +98,7 @@ async function load(skipWindows = false) {
     activeId.value = active.profile_id
     profileName.value = active.profile?.name ?? ''
     buttons.value = buttonsData.buttons || []
+    initButtonStates()
   } catch (e) {
     buttons.value = []
     message.value = e.message
@@ -99,8 +106,111 @@ async function load(skipWindows = false) {
   } finally {
     loading.value = false
   }
-  // Load windows in background only on initial load
   if (!skipWindows) loadWindowsAsync()
+}
+
+function initButtonStates() {
+  buttonStates.value.clear()
+  buttons.value.forEach(btn => {
+    if (btn.states) {
+      buttonStates.value.set(btn.id, 'initial')
+    }
+  })
+}
+
+function getCurrentState(btn) {
+  return buttonStates.value.get(btn.id) || 'initial'
+}
+
+function getButtonText(btn) {
+  if (!btn.states) return btn.name
+  const currentState = getCurrentState(btn)
+  const state = btn.states[currentState]
+  if (!state) return btn.name
+  return state.display?.text || currentState || btn.name
+}
+
+function getButtonStyle(btn) {
+  if (!btn.states) return {}
+  const currentState = getCurrentState(btn)
+  const state = btn.states[currentState]
+  if (!state || !state.display?.color) return {}
+  return { backgroundColor: state.display.color }
+}
+
+function handleButtonEvent(btn, eventType) {
+  if (!btn.states) {
+    simulate(btn.id, false).then((res) => {
+      message.value = res.success ? 'Done' : 'Failed'
+      messageType.value = res.success ? 'success' : 'error'
+    }).catch((e) => {
+      message.value = e.message
+      messageType.value = 'error'
+    })
+    return
+  }
+
+  const currentState = getCurrentState(btn)
+  const state = btn.states[currentState]
+  if (!state || !state.actions || !state.actions[eventType]) {
+    message.value = `No ${eventType} action for state ${currentState}`
+    messageType.value = 'error'
+    return
+  }
+
+  const eventData = state.actions[eventType]
+  const actionSeqId = eventData.id
+
+  simulate(actionSeqId, true).then((res) => {
+    if (res.success) {
+      const sequence = eventData.sequence || []
+      sequence.forEach(action => {
+        if (action.type === 'state_change' && action.target_state) {
+          if (btn.states[action.target_state]) {
+            buttonStates.value.set(btn.id, action.target_state)
+          } else {
+            console.warn(`State ${action.target_state} not found for button ${btn.id}`)
+          }
+        }
+      })
+      message.value = 'Done'
+      messageType.value = 'success'
+    } else {
+      message.value = 'Failed'
+      messageType.value = 'error'
+    }
+  }).catch((e) => {
+    message.value = e.message
+    messageType.value = 'error'
+  })
+}
+
+function onClick(btn, event) {
+  message.value = ''
+  
+  const timerId = clickTimers.value.get(btn.id)
+  if (timerId) {
+    clearTimeout(timerId)
+    clickTimers.value.delete(btn.id)
+    return
+  }
+
+  const timer = setTimeout(() => {
+    clickTimers.value.delete(btn.id)
+    handleButtonEvent(btn, 'click')
+  }, DOUBLE_CLICK_DELAY)
+  
+  clickTimers.value.set(btn.id, timer)
+}
+
+function onDblClick(btn, event) {
+  message.value = ''
+  const timerId = clickTimers.value.get(btn.id)
+  if (timerId) {
+    clearTimeout(timerId)
+    clickTimers.value.delete(btn.id)
+  }
+  handleButtonEvent(btn, 'dblclick')
 }
 
 async function loadWindowsAsync() {
@@ -112,18 +222,6 @@ async function loadWindowsAsync() {
     windows.value = []
   } finally {
     loadingWindows.value = false
-  }
-}
-
-async function onClick(btn) {
-  message.value = ''
-  try {
-    const res = await simulate(btn.id)
-    message.value = res.success ? 'Done' : 'Failed'
-    messageType.value = res.success ? 'success' : 'error'
-  } catch (e) {
-    message.value = e.message
-    messageType.value = 'error'
   }
 }
 
@@ -156,7 +254,6 @@ async function onSendText() {
   }
 }
 
-// Touchpad handlers
 function onTouchStart(e) {
   if (e.touches.length === 1) {
     const t = e.touches[0]
@@ -210,7 +307,6 @@ async function onClickBtn(btn) {
 
 onMounted(load)
 watch(activeId, (newVal, oldVal) => {
-  // Only reload buttons when activeId actually changes (not on initial set)
   if (oldVal !== undefined && newVal !== oldVal) load(true)
 })
 </script>

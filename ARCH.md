@@ -22,7 +22,34 @@ This document describes the frontend and backend of the Web Key Simulator only. 
 
 ### Button
 
-- **Fields**: `id` (UUID), `name`, `classes` (CSS for Panel), `key_sequence`
+Buttons now support **stateful behavior** with multiple states, each having different actions and visual configurations.
+
+- **Fields**: `id` (UUID), `name`, `classes` (CSS for Panel), `states`
+- **states**: object mapping state names to state configurations. Must include at minimum an `"initial"` state.
+
+#### State Configuration
+
+Each state has:
+- **display**: `{ text, color }` – visual representation in Panel
+  - `text`: button label (defaults to state name if empty)
+  - `color`: background color (e.g. `"#ff5555"`, optional)
+- **actions**: object mapping event types to action sequences
+  - Event types: `"click"`, `"dblclick"`
+  - Each action sequence has:
+    - `id`: unique identifier for the action sequence
+    - `sequence`: array of action objects
+
+#### Action Types
+
+Actions in a sequence can be:
+1. **Key action**: `{ type: "key", key: string, action: "down"|"press"|"up" }`
+   - Simulates keyboard input (executed by backend)
+2. **State change**: `{ type: "state_change", target_state: string }`
+   - Transitions button to a different state (handled by frontend)
+
+#### Legacy Format
+
+Old buttons with `key_sequence` field are still supported for backwards compatibility:
 - **key_sequence** (internal/API): array of steps. Each step is either:
   - **Object form** (frontend Editor): `{ key, action, _uiMode? }` where `_uiMode` is `'special'|'char'` and not sent to API
   - **Wire form** (API and key_simulator): list of pairs `[key, action]`, e.g. `[["ctrl", "down"], ["a", "press"], ["ctrl", "up"]]`
@@ -42,9 +69,14 @@ This document describes the frontend and backend of the Web Key Simulator only. 
 - **GET /profiles** → `[{ id, name }, ...]`
 - **GET /profiles/active** → `{ profile_id, profile }` (profile is full object or null)
 - **GET /profiles/{id}** → full profile `{ id, name, buttons }`
-- **PUT /profiles/{id}** body: `{ name, buttons }` with buttons having `id`, `name`, `classes`, `key_sequence` as array of `[key, action]`
-- **GET /buttons** → `{ buttons }` with each button `{ id, name, classes, key_sequence: [[key, action], ...] }`
-- **POST /simulate** body: `{ button_id }` or `{ key_sequence }` → `{ success }`
+- **PUT /profiles/{id}** body: `{ name, buttons }` with buttons having:
+  - New format: `{ id, name, classes, states: {...} }` (stateful buttons)
+  - Legacy format: `{ id, name, classes, key_sequence: [[key, action], ...] }` (backwards compatible)
+- **GET /buttons** → `{ buttons }` with each button in new or legacy format
+- **POST /simulate** body: `{ action_sequence_id }`, `{ button_id }`, or `{ key_sequence }` → `{ success }`
+  - **action_sequence_id**: Searches all buttons/states/events for matching action sequence and executes only key-type actions
+  - **button_id**: Legacy support for old button format
+  - **key_sequence**: Direct key sequence execution
 - **POST /paste-text** body: `{ text }` → `{ success }` (copies text to clipboard, simulates paste)
 - **POST /mouse/move** body: `{ dx, dy }` → `{ success }` (move mouse by relative offset)
 - **POST /mouse/click** body: `{ button }` → `{ success }` (simulate left/right/middle click)
@@ -76,7 +108,8 @@ This document describes the frontend and backend of the Web Key Simulator only. 
 - **main.py**
   - Pydantic: `KeyStep`, `ButtonIn`, `ButtonOut`, `ProfileCreate`, `ProfileUpdate`, `ProfileActive`, `SimulateBody`, `PasteTextBody`, `MouseMoveBody`, `MouseClickBody`, `WindowActivateBody`.
   - Routes: `list_profiles`, `create_profile`, `get_active`, `set_active`, `read_profile`, `update_profile`, `remove_profile`, `get_buttons`, `simulate`, `paste_text`, `mouse_move`, `mouse_click`, `get_windows`, `activate_window_route`.
-  - Helper: `_button_to_out(b)` – normalizes a stored button to `{ id, name, classes, key_sequence: [[k,a],...] }`.
+  - Helper: `_button_to_out(b)` – normalizes a stored button to output format (passes through both legacy `key_sequence` and new `states` formats).
+  - **simulate** endpoint: Accepts `action_sequence_id` (new), `button_id` (legacy), or `key_sequence` (raw). When using `action_sequence_id`, searches through all button states/events to find matching action sequence, then filters to execute only `key` type actions (ignores `state_change` actions which are frontend-only).
 - **profile_store.py**
   - Paths: `PROFILES_DIR`, `CURRENT_FILE`.
   - Public: `list_profiles()`, `get_profile(id)`, `save_profile(id, name, buttons)`, `delete_profile(id)`, `get_current_profile_id()`, `set_current_profile_id(id)`, `create_button_id()`.
@@ -132,22 +165,49 @@ This document describes the frontend and backend of the Web Key Simulator only. 
 
 ### Key flows (frontend)
 
-- **Panel**: On mount (and when activeId changes), `getActive()` then `getButtons()` and `getWindows()`; render buttons, touchpad, and window list. Button click → `simulate(btn.id)`; text input "Send & Paste" → `pasteText(text)`; touchpad drag → `mouseMove(dx, dy)`; touchpad buttons (Left/Middle/Right) → `mouseClick(button)`; window item click → `activateWindow(id)`.
-- **Editor**: On mount, `listProfiles()` and `getActive()`; select profile → `getProfile(id)`, normalize steps to `{ key, action, _uiMode }`; activate → `setActive(id)`; save → build payload with `key_sequence` as `[[key, action], ...]` (strip `_uiMode`), then `updateProfile(id, payload)`.
+- **Panel**: 
+  - On mount: `getActive()`, `getButtons()`, `getWindows()`, initialize `buttonStates` Map (all states set to "initial")
+  - **Stateful button click/double-click**: 
+    1. Check for pending click timer (to distinguish click vs double-click)
+    2. Get current state from `buttonStates` Map
+    3. Look up action sequence for (currentState, eventType) in button config
+    4. Send `simulate(actionSequenceId, true)` to backend
+    5. Process `state_change` actions locally: update `buttonStates` Map
+    6. Button display reactively updates based on new state
+  - **Legacy button click**: `simulate(btn.id, false)`
+  - Text input → `pasteText(text)`; touchpad drag → `mouseMove(dx, dy)`; touchpad buttons → `mouseClick(button)`; window click → `activateWindow(id)`
+  - **State reset**: Page refresh automatically resets all button states to "initial"
+  
+- **Editor**: 
+  - On mount: `listProfiles()` and `getActive()`
+  - Select profile → `getProfile(id)`, ensure button has `states` structure with at least "initial" state
+  - **State management**: Switch between states via tabs, add/remove states (protect "initial")
+  - **Per-state editing**: 
+    - Display: text and color inputs
+    - Events: click and double-click tabs
+    - Actions: key sequences (with special/char mode selector) or state_change (with target state dropdown)
+  - Save → build payload with cleaned `states` structure (generate `action_sequence_id` if missing), then `updateProfile(id, payload)`
 
 ---
 
 ## How Backend and Frontend Interact
 
 1. **Panel**
-   - Load: GET /profiles/active, GET /buttons, GET /windows.
-   - Button action: POST /simulate with `{ button_id }`. Backend resolves button from active profile and runs `key_simulator.simulate_key_sequence(...)`.
+   - Load: GET /profiles/active, GET /buttons, GET /windows. Initialize frontend state management (`buttonStates` Map).
+   - **Stateful button action**: 
+     - Frontend determines current state (from `buttonStates` Map) and event type (click/dblclick)
+     - Looks up action sequence in button's `states[currentState].actions[eventType]`
+     - POST /simulate with `{ action_sequence_id }`. Backend searches all buttons/states/events for matching ID, executes only `key` type actions.
+     - Frontend processes `state_change` actions: updates `buttonStates` Map, triggering reactive UI update.
+   - **Legacy button action**: POST /simulate with `{ button_id }`. Backend resolves button from active profile and runs `key_simulator.simulate_key_sequence(...)`.
    - Touchpad: POST /mouse/move with `{ dx, dy }` on drag; POST /mouse/click with `{ button }` on button press. Backend runs `mouse_controller.move_relative(...)` or `mouse_controller.click(...)`.
    - Window: POST /windows/activate with `{ window_id }`. Backend brings window to front via `window_lister.activate_window(...)`.
 2. **Editor**
    - List/activate: GET /profiles, GET /profiles/active, POST /profiles/active, GET /profiles/{id}.
-   - CRUD: POST /profiles, PUT /profiles/{id}, DELETE /profiles/{id}. PUT sends `key_sequence` as array of `[key, action]`; backend stores and returns same shape.
-3. **Key simulation path**: Frontend never sends raw key_sequence for the Panel (only button_id). Backend loads active profile → finds button → gets key_sequence → KeySimulator runs down/press/up with OS-specific delays.
+   - CRUD: POST /profiles, PUT /profiles/{id}, DELETE /profiles/{id}. PUT sends button `states` structure with action sequences (each having unique `id`); backend stores and returns same shape. Legacy `key_sequence` format still accepted.
+3. **Key simulation path**: 
+   - **Stateful**: Frontend sends `action_sequence_id`. Backend searches all button states/events → finds action sequence → filters to `key` type actions → KeySimulator runs down/press/up with OS-specific delays.
+   - **Legacy**: Frontend sends `button_id`. Backend loads active profile → finds button → gets key_sequence → KeySimulator executes.
 4. **Text paste path**: Frontend sends text via POST /paste-text. Backend copies text to system clipboard (pyperclip), then simulates OS-specific paste keystroke (Cmd+V on macOS, Ctrl+V on Windows/Linux) via KeySimulator.
 5. **Mouse control path**: Frontend touchpad tracks touch/mouse drag and sends relative deltas via POST /mouse/move. Click buttons send POST /mouse/click. Backend uses pynput mouse controller.
 6. **Window activation path**: Frontend lists windows via GET /windows, user clicks one, POST /windows/activate brings it to front.
@@ -179,9 +239,68 @@ frontend/
 
 ---
 
+## Stateful Button Architecture
+
+The stateful button system allows buttons to have multiple states, each with different visual presentations and behaviors.
+
+### Key Design Decisions
+
+1. **Frontend State Management**: Button states are stored in Vue reactive state (`buttonStates` Map), not persisted in backend. This eliminates backend state management complexity.
+
+2. **Action Sequence IDs**: Each event action (click, double-click) has a unique ID. Frontend sends ID to backend, which searches for and executes matching action sequence.
+
+3. **Action Type Filtering**: 
+   - Backend executes only `key` type actions (keyboard simulation)
+   - Frontend processes only `state_change` type actions (UI state transitions)
+   - Both can coexist in the same action sequence
+
+4. **State Reset**: Page refresh naturally resets all button states to "initial" (no explicit reset button needed)
+
+5. **Event Handling**: Click and double-click are distinguished using a debounce timer (300ms delay)
+
+### Example: Toggle Button
+
+```json
+{
+  "id": "toggle-btn",
+  "name": "Toggle",
+  "classes": "",
+  "states": {
+    "initial": {
+      "display": { "text": "Off", "color": "#666" },
+      "actions": {
+        "click": {
+          "id": "action-123",
+          "sequence": [
+            { "type": "key", "key": "a", "action": "press" },
+            { "type": "state_change", "target_state": "active" }
+          ]
+        }
+      }
+    },
+    "active": {
+      "display": { "text": "On", "color": "#6c6" },
+      "actions": {
+        "click": {
+          "id": "action-456",
+          "sequence": [
+            { "type": "key", "key": "b", "action": "press" },
+            { "type": "state_change", "target_state": "initial" }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
 ## Quick Reference for Changes
 
 - **Add an API endpoint**: Add route in `backend/main.py`; add corresponding function in `frontend/src/api.js`; use in a view.
 - **Change profile/button shape**: Update `profile_store` read/write and `main.py` Pydantic models and `_button_to_out`; update Editor payload and any Panel display.
 - **Add a special key**: Add to `frontend/src/constants.js` `SPECIAL_KEYS`; add mapping in `backend/key_simulator.py` (`_get_pynput_key` and, if needed, `_get_windows_vk_code`).
 - **Change key actions**: Adjust `KEY_ACTIONS` in constants and backend `KeySimulator._simulate_key_action` if new actions are added.
+- **Add button state**: Create new state in Editor, configure display and event actions. State transitions are handled by `state_change` actions.
+- **Add event type**: Update Editor to show new event tab; backend `/simulate` already handles any action sequence ID regardless of event type.

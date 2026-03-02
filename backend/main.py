@@ -84,6 +84,7 @@ class ProfileActive(BaseModel):
 class SimulateBody(BaseModel):
     button_id: Optional[str] = None
     key_sequence: Optional[List[List[str]]] = None
+    action_sequence_id: Optional[str] = None
 
 
 class WindowActivateBody(BaseModel):
@@ -104,6 +105,13 @@ class MouseClickBody(BaseModel):
 
 
 def _button_to_out(b: dict) -> dict:
+    if "states" in b:
+        return {
+            "id": b.get("id", ""),
+            "name": b.get("name", ""),
+            "classes": b.get("classes", ""),
+            "states": b.get("states", {}),
+        }
     kq = b.get("key_sequence") or []
     return {
         "id": b.get("id", ""),
@@ -167,19 +175,27 @@ def update_profile(profile_id: str, body: ProfileUpdate):
     buttons = []
     for b in body.buttons:
         bid = b.get("id") or create_button_id()
-        kq = b.get("key_sequence") or []
-        if not kq:
-            keys_list = []
-        elif isinstance(kq[0], (list, tuple)):
-            keys_list = [[s[0], s[1]] for s in kq]
+        if "states" in b:
+            buttons.append({
+                "id": bid,
+                "name": b.get("name", ""),
+                "classes": b.get("classes", ""),
+                "states": b.get("states", {}),
+            })
         else:
-            keys_list = kq
-        buttons.append({
-            "id": bid,
-            "name": b.get("name", ""),
-            "classes": b.get("classes", ""),
-            "key_sequence": keys_list,
-        })
+            kq = b.get("key_sequence") or []
+            if not kq:
+                keys_list = []
+            elif isinstance(kq[0], (list, tuple)):
+                keys_list = [[s[0], s[1]] for s in kq]
+            else:
+                keys_list = kq
+            buttons.append({
+                "id": bid,
+                "name": b.get("name", ""),
+                "classes": b.get("classes", ""),
+                "key_sequence": keys_list,
+            })
     store_save_profile(profile_id, body.name, buttons)
     return get_profile(profile_id)
 
@@ -220,8 +236,35 @@ def activate_window_route(body: WindowActivateBody):
 
 @app.post("/simulate")
 def simulate(body: SimulateBody):
-    """Run key sequence: by button_id from active profile, or raw key_sequence."""
-    if body.button_id:
+    """Run key sequence: by button_id from active profile, by action_sequence_id, or raw key_sequence."""
+    if body.action_sequence_id:
+        pid = get_current_profile_id()
+        if not pid:
+            raise HTTPException(status_code=400, detail="No active profile")
+        profile = get_profile(pid)
+        if not profile:
+            raise HTTPException(status_code=400, detail="Active profile not found")
+        buttons = profile.get("buttons", [])
+        action_seq = None
+        for btn in buttons:
+            states = btn.get("states", {})
+            for state_name, state_data in states.items():
+                actions = state_data.get("actions", {})
+                for event_type, event_data in actions.items():
+                    if event_data.get("id") == body.action_sequence_id:
+                        action_seq = event_data.get("sequence", [])
+                        break
+                if action_seq is not None:
+                    break
+            if action_seq is not None:
+                break
+        if action_seq is None:
+            raise HTTPException(status_code=404, detail="Action sequence not found")
+        key_sequence = []
+        for action in action_seq:
+            if isinstance(action, dict) and action.get("type") == "key":
+                key_sequence.append([action.get("key"), action.get("action", "press")])
+    elif body.button_id:
         pid = get_current_profile_id()
         if not pid:
             raise HTTPException(status_code=400, detail="No active profile")
@@ -236,7 +279,7 @@ def simulate(body: SimulateBody):
     elif body.key_sequence:
         key_sequence = body.key_sequence
     else:
-        raise HTTPException(status_code=400, detail="Provide button_id or key_sequence")
+        raise HTTPException(status_code=400, detail="Provide button_id, action_sequence_id, or key_sequence")
     if not key_sequence:
         return {"success": True}
     seq = [(s[0], s[1]) for s in key_sequence]
