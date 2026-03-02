@@ -70,3 +70,11 @@ export async function mouseMove(dx, dy) {
 export async function mouseClick(button = 'left') {
   return request('/mouse/click', { method: 'POST', body: JSON.stringify({ button }) })
 }
+
+export async function getSettings() {
+  return request('/settings')
+}
+
+export async function updateSettings(settings) {
+  return request('/settings', { method: 'PUT', body: JSON.stringify(settings) })
+}

@@ -69,7 +69,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { getActive, getButtons, simulate, getWindows, activateWindow, pasteText, mouseMove, mouseClick } from '../api'
+import { getActive, getButtons, simulate, getWindows, activateWindow, pasteText, mouseMove, mouseClick, getSettings } from '../api'
 
 const buttons = ref([])
 const windows = ref([])
@@ -86,7 +86,7 @@ const buttonStates = ref(new Map())
 
 const touchpadRef = ref(null)
 const lastPos = ref(null)
-const sensitivity = 1.5
+const sensitivity = ref(1.5)
 
 const clickTimers = ref(new Map())
 const DOUBLE_CLICK_DELAY = 300
@@ -94,10 +94,11 @@ const DOUBLE_CLICK_DELAY = 300
 async function load(skipWindows = false) {
   loading.value = true
   try {
-    const [active, buttonsData] = await Promise.all([getActive(), getButtons()])
+    const [active, buttonsData, settings] = await Promise.all([getActive(), getButtons(), getSettings()])
     activeId.value = active.profile_id
     profileName.value = active.profile?.name ?? ''
     buttons.value = buttonsData.buttons || []
+    sensitivity.value = settings.touchpad_sensitivity ?? 1.5
     initButtonStates()
   } catch (e) {
     buttons.value = []
@@ -265,8 +266,8 @@ function onTouchMove(e) {
   if (e.touches.length !== 1 || !lastPos.value) return
   e.preventDefault()
   const t = e.touches[0]
-  const dx = Math.round((t.clientX - lastPos.value.x) * sensitivity)
-  const dy = Math.round((t.clientY - lastPos.value.y) * sensitivity)
+  const dx = Math.round((t.clientX - lastPos.value.x) * sensitivity.value)
+  const dy = Math.round((t.clientY - lastPos.value.y) * sensitivity.value)
   lastPos.value = { x: t.clientX, y: t.clientY }
   if (dx !== 0 || dy !== 0) mouseMove(dx, dy).catch(() => {})
 }
@@ -279,8 +280,8 @@ function onMouseDown(e) {
   lastPos.value = { x: e.clientX, y: e.clientY }
   const onMove = (ev) => {
     if (!lastPos.value) return
-    const dx = Math.round((ev.clientX - lastPos.value.x) * sensitivity)
-    const dy = Math.round((ev.clientY - lastPos.value.y) * sensitivity)
+    const dx = Math.round((ev.clientX - lastPos.value.x) * sensitivity.value)
+    const dy = Math.round((ev.clientY - lastPos.value.y) * sensitivity.value)
     lastPos.value = { x: ev.clientX, y: ev.clientY }
     if (dx !== 0 || dy !== 0) mouseMove(dx, dy).catch(() => {})
   }

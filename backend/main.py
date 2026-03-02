@@ -29,6 +29,7 @@ from profile_store import (
 )
 from window_lister import activate_window as lister_activate_window, list_windows
 from mouse_controller import create_mouse_controller
+from settings_store import get_settings as store_get_settings, update_settings as store_update_settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,6 +103,10 @@ class MouseMoveBody(BaseModel):
 
 class MouseClickBody(BaseModel):
     button: str = "left"
+
+
+class SettingsBody(BaseModel):
+    touchpad_sensitivity: Optional[float] = None
 
 
 def _button_to_out(b: dict) -> dict:
@@ -316,6 +321,25 @@ def mouse_click(body: MouseClickBody):
         raise HTTPException(status_code=400, detail="Invalid button")
     success = mouse_ctrl.click(body.button)
     return {"success": success}
+
+
+@app.get("/settings")
+def get_settings():
+    """Get application settings."""
+    return store_get_settings()
+
+
+@app.put("/settings")
+def update_settings(body: SettingsBody):
+    """Update application settings (partial update supported)."""
+    updates = {}
+    if body.touchpad_sensitivity is not None:
+        if body.touchpad_sensitivity < 0.1 or body.touchpad_sensitivity > 50.0:
+            raise HTTPException(status_code=400, detail="touchpad_sensitivity must be between 0.1 and 50.0")
+        updates["touchpad_sensitivity"] = body.touchpad_sensitivity
+    if updates:
+        store_update_settings(updates)
+    return store_get_settings()
 
 
 _static_dir = Path(__file__).parent / "static"

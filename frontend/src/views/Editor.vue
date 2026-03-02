@@ -1,6 +1,27 @@
 <template>
   <div class="editor">
     <section class="section">
+      <h2>Settings</h2>
+      <div class="settings-row">
+        <label>Touchpad Sensitivity: {{ settings.touchpad_sensitivity.toFixed(2) }}</label>
+        <input
+          :value="sensitivityToSlider(settings.touchpad_sensitivity)"
+          @input="onSensitivityChange"
+          type="range"
+          class="slider"
+          min="0"
+          max="100"
+          step="1"
+        />
+        <div class="range-labels">
+          <span>0.1 (slow)</span>
+          <span>50 (fast)</span>
+        </div>
+        <button type="button" class="btn primary" @click="saveSettings">Save Settings</button>
+      </div>
+    </section>
+
+    <section class="section">
       <h2>Profiles</h2>
       <div class="profile-list">
         <div v-for="p in profiles" :key="p.id" class="profile-row">
@@ -181,6 +202,8 @@ import {
   updateProfile,
   deleteProfile,
   setActive,
+  getSettings,
+  updateSettings,
 } from '../api'
 import { SPECIAL_KEYS, KEY_ACTIONS } from '../constants'
 
@@ -191,6 +214,26 @@ const currentProfile = ref(null)
 const newProfileName = ref('')
 const msg = ref('')
 const msgType = ref('success')
+const settings = ref({ touchpad_sensitivity: 1.5 })
+
+function sensitivityToSlider(sensitivity) {
+  const minLog = Math.log(0.1)
+  const maxLog = Math.log(50)
+  const value = (Math.log(sensitivity) - minLog) / (maxLog - minLog) * 100
+  return Math.max(0, Math.min(100, value))
+}
+
+function sliderToSensitivity(sliderValue) {
+  const minLog = Math.log(0.1)
+  const maxLog = Math.log(50)
+  const sensitivity = Math.exp(minLog + (sliderValue / 100) * (maxLog - minLog))
+  return Math.max(0.1, Math.min(50, sensitivity))
+}
+
+function onSensitivityChange(event) {
+  const sliderValue = parseFloat(event.target.value)
+  settings.value.touchpad_sensitivity = sliderToSensitivity(sliderValue)
+}
 
 function ensureButtonStates(btn) {
   if (!btn.states) {
@@ -344,6 +387,27 @@ async function loadProfiles() {
   activeId.value = active.profile_id
 }
 
+async function loadSettings() {
+  try {
+    const data = await getSettings()
+    settings.value = data
+  } catch (e) {
+    msg.value = 'Failed to load settings'
+    msgType.value = 'error'
+  }
+}
+
+async function saveSettings() {
+  try {
+    await updateSettings({ touchpad_sensitivity: settings.value.touchpad_sensitivity })
+    msg.value = 'Settings saved'
+    msgType.value = 'success'
+  } catch (e) {
+    msg.value = e.message
+    msgType.value = 'error'
+  }
+}
+
 function select(id) {
   selectedId.value = id
   getProfile(id).then((p) => {
@@ -418,7 +482,10 @@ function saveProfile() {
   }).catch((e) => { msg.value = e.message; msgType.value = 'error' })
 }
 
-onMounted(loadProfiles)
+onMounted(() => {
+  loadProfiles()
+  loadSettings()
+})
 </script>
 
 <style scoped>
@@ -433,6 +500,14 @@ onMounted(loadProfiles)
   .profile-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
   .profile-name { min-width: 120px; }
   .row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+  .settings-row { display: flex; flex-direction: column; gap: 0.5rem; }
+  .settings-row label { font-weight: 600; margin-bottom: 0.25rem; }
+  .slider { width: 100%; height: 6px; border-radius: 3px; background: #444; outline: none; -webkit-appearance: none; appearance: none; }
+  .slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #36a; cursor: pointer; }
+  .slider::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #36a; cursor: pointer; border: none; }
+  .slider:hover::-webkit-slider-thumb { background: #47b; }
+  .slider:hover::-moz-range-thumb { background: #47b; }
+  .range-labels { display: flex; justify-content: space-between; font-size: 0.8rem; color: #888; margin-bottom: 0.5rem; }
   .input { padding: 0.4rem 0.6rem; border: 1px solid #444; border-radius: 4px; background: #252525; color: #e0e0e0; }
   .btn { padding: 0.5rem 0.75rem; border: 1px solid #444; border-radius: 4px; background: #333; color: #e0e0e0; cursor: pointer; }
   .btn:hover { background: #444; }
